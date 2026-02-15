@@ -173,6 +173,54 @@ try {
 }
 
 # =============================================
+# 2b. C++ BUILD TOOLS (fuer native Module)
+# =============================================
+
+Write-Step "Pruefe C++ Build Tools (fuer native Module)..."
+
+$hasBuildTools = $false
+try {
+    $null = & where.exe cl.exe 2>$null
+    $hasBuildTools = $true
+} catch {}
+
+if (-not $hasBuildTools) {
+    # Check via npm config
+    try {
+        $msvs = & npm config get msvs_version 2>$null
+        if ($msvs -and $msvs -ne 'undefined') { $hasBuildTools = $true }
+    } catch {}
+}
+
+if (-not $hasBuildTools) {
+    # Check common VS Build Tools paths
+    $vsWhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+    if (Test-Path $vsWhere) {
+        $vsInstall = & $vsWhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null
+        if ($vsInstall) { $hasBuildTools = $true }
+    }
+}
+
+if ($hasBuildTools) {
+    Write-Ok "C++ Build Tools verfuegbar"
+} else {
+    Write-Warn "C++ Build Tools nicht gefunden"
+    Write-Info "Native Module (better-sqlite3, classic-level) benoetigen C++ Build Tools."
+    Write-Info "Versuche Installation via winget..."
+    try {
+        $null = & winget --version 2>$null
+        & winget install Microsoft.VisualStudio.2022.BuildTools --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended" --accept-package-agreements --accept-source-agreements 2>$null
+        Write-Ok "Build Tools installiert (evtl. Neustart erforderlich)"
+    } catch {
+        Write-Warn "Build Tools konnten nicht installiert werden."
+        Write-Info "Falls npm install fehlschlaegt, manuell installieren:"
+        Write-Info "  winget install Microsoft.VisualStudio.2022.BuildTools"
+        Write-Info "  ODER: https://visualstudio.microsoft.com/visual-cpp-build-tools/"
+        Write-Info "  -> Workload 'Desktop development with C++' auswaehlen"
+    }
+}
+
+# =============================================
 # 3. PYTHON (fuer ARGUS Backend)
 # =============================================
 
@@ -269,12 +317,22 @@ if (Test-Path $nodeModules) {
 
 try {
     Push-Location $projectRoot
-    & npm install 2>&1 | ForEach-Object {
-        if ($_ -match "added|removed|up to date|packages") { Write-Info $_ }
+    Write-Info "Laufend... (kann einige Minuten dauern)"
+    & npm install 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn "npm install hatte Fehler (Exit Code: $LASTEXITCODE)"
+        Write-Info "Versuche erneut mit --ignore-scripts..."
+        & npm install --ignore-scripts 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "npm install fehlgeschlagen mit Exit Code $LASTEXITCODE"
+        }
+        Write-Ok "npm-Abhaengigkeiten installiert (ohne native Scripts)"
+    } else {
+        Write-Ok "npm-Abhaengigkeiten installiert"
     }
-    Write-Ok "npm-Abhaengigkeiten installiert"
 } catch {
     Write-Fail "npm install fehlgeschlagen: $_"
+    Write-Info "Manuell versuchen: npm install"
     exit 1
 } finally {
     Pop-Location
@@ -284,10 +342,14 @@ try {
 Write-Step "Rebuilde native Module fuer Electron..."
 try {
     Push-Location $projectRoot
-    & npx @electron/rebuild -f -w better-sqlite3 classic-level 2>&1 | ForEach-Object {
-        if ($_ -match "rebuild|compiled|built") { Write-Info $_ }
+    Write-Info "Laufend... (kann einige Minuten dauern)"
+    & npx @electron/rebuild -f -w better-sqlite3 classic-level 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn "Rebuild Exit Code: $LASTEXITCODE - versuche Einzelmodule..."
+        & npx @electron/rebuild -f -w better-sqlite3 2>&1
+        & npx @electron/rebuild -f -w classic-level 2>&1
     }
-    Write-Ok "Native Module fuer Electron gebaut (better-sqlite3, classic-level)"
+    Write-Ok "Native Module fuer Electron gebaut"
 } catch {
     Write-Warn "Native-Module-Rebuild fehlgeschlagen - SQLite-Features koennten eingeschraenkt sein"
     Write-Info "Manuell versuchen: npx @electron/rebuild -f -w better-sqlite3 classic-level"
@@ -339,14 +401,13 @@ if (-not $SkipBuild) {
         
         # TypeScript Typcheck
         Write-Info "TypeScript Typcheck..."
-        & npx tsc --noEmit 2>&1 | ForEach-Object {
-            if ($_ -match "error") { Write-Warn $_ }
-        }
+        & npx tsc --noEmit 2>&1
         
         # Webpack Build (3 configs: preload, main, renderer)
-        Write-Info "Webpack Build (3 Bundles)..."
-        & npm run build 2>&1 | ForEach-Object {
-            if ($_ -match "compiled|error|ERROR") { Write-Info $_ }
+        Write-Info "Webpack Build (3 Bundles)... (kann 1-2 Minuten dauern)"
+        & npm run build 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warn "Build hatte Warnungen/Fehler (Exit Code: $LASTEXITCODE)"
         }
         
         # Pruefe ob dist existiert
