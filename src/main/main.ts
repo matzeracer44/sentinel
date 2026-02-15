@@ -1147,7 +1147,6 @@ ipcMain.handle('get-real-system-data', async () => {
     const cpuInfo = getCPUInfo();
     const systemInfo = getSystemInfo();
     const osInfo = getOSInfo();
-    const { execFile: execF } = require('child_process');
 
     // Single async PS call for disk, GPU, network, battery — no main thread blocking
     let disks: any[] = [];
@@ -2898,7 +2897,6 @@ ipcMain.handle('forge-clear-standby-cache', async () => {
 // Startup Programs — Registry + WMI + Scheduled Tasks + Risk assessment
 ipcMain.handle('forge-get-startup-items', async () => {
   try {
-    const { execFile: execF } = require('child_process');
     const psScript = `$ErrorActionPreference='SilentlyContinue'
 $all=@()
 Get-CimInstance Win32_StartupCommand|ForEach-Object{$all+=[PSCustomObject]@{name=$_.Name;command=$_.Command;location=$_.Location;user=$_.User;source='WMI'}}
@@ -2948,7 +2946,6 @@ $unique=$all|Sort-Object name -Unique
 // Services — real enumeration via PowerShell + WMI PathName
 ipcMain.handle('forge-get-windows-services', async () => {
   try {
-    const { execFile: execF } = require('child_process');
     const psScript = `$ErrorActionPreference='SilentlyContinue'
 $wmiMap=@{};Get-CimInstance Win32_Service|ForEach-Object{$wmiMap[$_.Name]=$_.PathName}
 Get-Service|ForEach-Object{[PSCustomObject]@{name=$_.Name;displayName=$_.DisplayName;status=$_.Status.ToString();startType=$_.StartType.ToString();path=if($wmiMap.ContainsKey($_.Name)){$wmiMap[$_.Name]}else{''}}}|ConvertTo-Json -Depth 2 -Compress`;
@@ -3134,7 +3131,6 @@ ipcMain.handle('vault-get-encrypted-files', async () => {
 // === EVENT LOG ANALYZER ===
 ipcMain.handle('sentinel-eventlog-get-security', async () => {
   try {
-    const { execFile: execF } = require('child_process');
     const psScript = `$ErrorActionPreference='SilentlyContinue'
 Get-WinEvent -LogName Security -MaxEvents 200|ForEach-Object{[PSCustomObject]@{id=$_.Id;timeCreated=$_.TimeCreated.ToString('o');level=$_.LevelDisplayName;message=($_.Message -split '\n')[0];provider=$_.ProviderName}}|ConvertTo-Json -Depth 2 -Compress`;
     const { runPowerShellSafe } = await import('./services/execOptions');
@@ -3150,7 +3146,6 @@ Get-WinEvent -LogName Security -MaxEvents 200|ForEach-Object{[PSCustomObject]@{i
 
 ipcMain.handle('sentinel-eventlog-get-alerts', async () => {
   try {
-    const { execFile: execF } = require('child_process');
     const psScript = `$ErrorActionPreference='SilentlyContinue'
 $suspiciousIds=@(4625,4672,4688,7045,4720,4732,1102)
 $events=Get-WinEvent -LogName Security -MaxEvents 5000|Where-Object{$suspiciousIds -contains $_.Id}|Select-Object -First 100|ForEach-Object{
@@ -3171,7 +3166,6 @@ $events|ConvertTo-Json -Depth 2 -Compress`;
 // === SYSTEM HARDENING SCORE ===
 ipcMain.handle('sentinel-hardening-get-score', async () => {
   try {
-    const { execFile: execF } = require('child_process');
     const psScript = `$ErrorActionPreference='SilentlyContinue';$checks=@();$passed=0;$total=0
 $total++;$fw=Get-NetFirewallProfile|Where-Object{$_.Enabled -eq $true};$fwOk=($fw.Count -ge 3);if($fwOk){$passed++};$checks+=[PSCustomObject]@{name='Firewall Active (All Profiles)';passed=$fwOk;category='Network'}
 $total++;$def=Get-MpComputerStatus -EA SilentlyContinue;$defOk=($def.AntivirusEnabled -eq $true);if($defOk){$passed++};$checks+=[PSCustomObject]@{name='Windows Defender Active';passed=$defOk;category='Antivirus'}
@@ -3200,7 +3194,6 @@ $score=if($total -gt 0){[math]::Round(($passed/$total)*100)}else{0}
 // === PORT SCANNER (own open ports) ===
 ipcMain.handle('sentinel-portscan-run', async () => {
   try {
-    const { execFile: execF } = require('child_process');
     const psScript = `$ErrorActionPreference='SilentlyContinue'
 $listening=Get-NetTCPConnection -State Listen|ForEach-Object{$proc=Get-Process -Id $_.OwningProcess -EA SilentlyContinue;[PSCustomObject]@{port=$_.LocalPort;address=$_.LocalAddress;pid=$_.OwningProcess;process=if($proc){$proc.ProcessName}else{'Unknown'};processPath=if($proc){$proc.Path}else{''}}}|Sort-Object port -Unique
 $listening|ConvertTo-Json -Depth 2 -Compress`;
@@ -4003,7 +3996,6 @@ ipcMain.handle('forge-optimize-ram', async () => {
 
 ipcMain.handle('forge-get-top-cpu-processes', async () => {
   try {
-    const { execFile: execF } = require('child_process');
     const psCmd = 'Get-Process|Sort-Object CPU -Descending|Select-Object -First 20 Id,ProcessName,@{N="CPU";E={[math]::Round($_.CPU,1)}},@{N="MemMB";E={[math]::Round($_.WorkingSet64/1MB,1)}}|ConvertTo-Json -Compress';
     const { runPowerShellSafe } = await import('./services/execOptions');
     const raw = await runPowerShellSafe(psCmd, { timeout: 10000 });
@@ -4017,7 +4009,6 @@ ipcMain.handle('forge-get-top-cpu-processes', async () => {
 
 ipcMain.handle('forge-get-cpu-core-count', async () => {
   try {
-    const { execFile: execF } = require('child_process');
     const psCmd = 'Get-CimInstance Win32_Processor|Select-Object -First 1 NumberOfCores,NumberOfLogicalProcessors|ConvertTo-Json -Compress';
     const { runPowerShellSafe } = await import('./services/execOptions');
     const out = (await runPowerShellSafe(psCmd, { timeout: 5000 })).trim();
@@ -4128,7 +4119,6 @@ ipcMain.handle('forge-disable-all-bloatware', async () => {
 ipcMain.handle('forge-backup-services-state', async () => {
   try {
     const backupPath = path.join(app.getPath('userData'), 'services-backup.json');
-    const { execFile: execF } = require('child_process');
     const psCmd = 'Get-Service|Select-Object Name,StartType|ConvertTo-Json -Compress';
     const { runPowerShellSafe } = await import('./services/execOptions');
     const raw = await runPowerShellSafe(psCmd, { timeout: 15000 });
@@ -4611,7 +4601,6 @@ const _enhancedCpuPrev = new Map<number, { name: string; cpuMs: number; ts: numb
 ipcMain.handle('get-processes-enhanced', async () => {
   try {
     const { getProcessKillRisk } = await import('../shared/constants');
-    const { execFile: execF } = require('child_process');
     const psCmd = `$ErrorActionPreference='SilentlyContinue';Get-Process|Where-Object{$_.Id -gt 0}|Sort-Object WorkingSet64 -Descending|Select-Object -First 80 Id,ProcessName,@{N="CPUms";E={try{[math]::Round($_.TotalProcessorTime.TotalMilliseconds)}catch{0}}},@{N="MemMB";E={[math]::Round($_.WorkingSet64/1MB,1)}},Path,Description,Company|ConvertTo-Json -Compress`;
     const { runPowerShellSafe } = await import('./services/execOptions');
     const raw = await runPowerShellSafe(psCmd, { timeout: 12000, maxBuffer: 10 * 1024 * 1024 });
@@ -4655,7 +4644,6 @@ ipcMain.handle('kill-process', async (_event, pid: number) => {
 
 ipcMain.handle('get-startup-programs', async () => {
   try {
-    const { execFile: execF } = require('child_process');
     const psCmd = 'Get-CimInstance Win32_StartupCommand|Select-Object Name,Command,Location,User|ConvertTo-Json -Compress';
     const { runPowerShellSafe } = await import('./services/execOptions');
     const result = { stdout: await runPowerShellSafe(psCmd, { timeout: 10000 }) };
