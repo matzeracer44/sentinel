@@ -112,6 +112,27 @@ let tray: Tray | null = null;
 let isQuitting = false;
 let isAdmin = false;
 let hasInitialized = false;
+
+// ════════════════════════════════════════════════════════════════
+// LIVE AUDIT LOG — real-time event stream to renderer
+// ════════════════════════════════════════════════════════════════
+interface AuditEvent {
+  ts: number;
+  module: string;
+  action: string;
+  message: string;
+  severity: 'info' | 'success' | 'warning' | 'error';
+  meta?: Record<string, unknown>;
+}
+const auditBuffer: AuditEvent[] = [];
+const MAX_AUDIT_BUFFER = 500;
+
+function emitAudit(module: string, action: string, message: string, severity: AuditEvent['severity'] = 'info', meta?: Record<string, unknown>): void {
+  const evt: AuditEvent = { ts: Date.now(), module, action, message, severity, meta };
+  auditBuffer.push(evt);
+  if (auditBuffer.length > MAX_AUDIT_BUFFER) auditBuffer.splice(0, auditBuffer.length - MAX_AUDIT_BUFFER);
+  try { mainWindow?.webContents.send('sentinel-audit-event', evt); } catch { /* window closed */ }
+}
 let initAttempt = 0;
 let pendingRuleSweepTimer: NodeJS.Timeout | null = null;
 let scheduledScanTimer: NodeJS.Timeout | null = null;
@@ -1478,10 +1499,15 @@ ipcMain.handle('shield-get-blocked-ips', async () => {
 });
 
 ipcMain.handle('shield-block-ip', async (event, ip: string, reason: string) => {
-  return await blockIP(ip, reason);
+  emitAudit('shield', 'block-ip', `Blocking IP: ${ip} — ${reason}`, 'warning', { ip, reason });
+  const r = await blockIP(ip, reason);
+  if (r?.success) emitAudit('shield', 'block-ip-done', `IP blocked: ${ip}`, 'success', { ip });
+  else emitAudit('shield', 'block-ip-fail', `Failed to block ${ip}`, 'error', { ip });
+  return r;
 });
 
 ipcMain.handle('shield-unblock-ip', async (event, ip: string) => {
+  emitAudit('shield', 'unblock-ip', `Unblocking IP: ${ip}`, 'info', { ip });
   return await unblockIP(ip);
 });
 
@@ -1499,52 +1525,67 @@ ipcMain.handle('shield-get-security-overview', async () => {
 
 ipcMain.handle('sentinel-kernel-scan', async () => {
   try {
+    emitAudit('kernel', 'scan-start', 'Kernel & Firmware Integrity scan started', 'info');
     const { enrichChecks } = await import('./services/scanners/mergeCheckDetails');
     const checks = enrichChecks(await runAllKernelChecks());
+    checks.forEach((c: any) => emitAudit('kernel', 'check', `${c.status === 'pass' ? '✓' : c.status === 'warn' ? '⚠' : '✕'} ${c.name}`, c.status === 'pass' ? 'success' : c.status === 'warn' ? 'warning' : 'error', { checkId: c.id, status: c.status }));
     const passed = checks.filter((c: any) => c.status === 'pass').length;
     const score = Math.round((passed / checks.length) * 100);
+    emitAudit('kernel', 'scan-done', `Kernel scan complete: ${passed}/${checks.length} passed (${score}%)`, score >= 80 ? 'success' : 'warning');
     return { success: true, module: 'kernel', checks, passed, total: checks.length, score };
-  } catch (e: any) { return { success: false, error: e.message }; }
+  } catch (e: any) { emitAudit('kernel', 'scan-error', `Kernel scan failed: ${e.message}`, 'error'); return { success: false, error: e.message }; }
 });
 
 ipcMain.handle('sentinel-edr-scan', async () => {
   try {
+    emitAudit('edr', 'scan-start', 'EDR & Behavioral Engine scan started', 'info');
     const { enrichChecks } = await import('./services/scanners/mergeCheckDetails');
     const checks = enrichChecks(await runAllEdrChecks());
+    checks.forEach((c: any) => emitAudit('edr', 'check', `${c.status === 'pass' ? '✓' : c.status === 'warn' ? '⚠' : '✕'} ${c.name}`, c.status === 'pass' ? 'success' : c.status === 'warn' ? 'warning' : 'error', { checkId: c.id, status: c.status }));
     const passed = checks.filter((c: any) => c.status === 'pass').length;
     const score = Math.round((passed / checks.length) * 100);
+    emitAudit('edr', 'scan-done', `EDR scan complete: ${passed}/${checks.length} passed (${score}%)`, score >= 80 ? 'success' : 'warning');
     return { success: true, module: 'edr', checks, passed, total: checks.length, score };
-  } catch (e: any) { return { success: false, error: e.message }; }
+  } catch (e: any) { emitAudit('edr', 'scan-error', `EDR scan failed: ${e.message}`, 'error'); return { success: false, error: e.message }; }
 });
 
 ipcMain.handle('sentinel-network-scan', async () => {
   try {
+    emitAudit('network', 'scan-start', 'Network & WFP Firewall scan started', 'info');
     const { enrichChecks } = await import('./services/scanners/mergeCheckDetails');
     const checks = enrichChecks(await runAllNetworkChecks());
+    checks.forEach((c: any) => emitAudit('network', 'check', `${c.status === 'pass' ? '✓' : c.status === 'warn' ? '⚠' : '✕'} ${c.name}`, c.status === 'pass' ? 'success' : c.status === 'warn' ? 'warning' : 'error', { checkId: c.id, status: c.status }));
     const passed = checks.filter((c: any) => c.status === 'pass').length;
     const score = Math.round((passed / checks.length) * 100);
+    emitAudit('network', 'scan-done', `Network scan complete: ${passed}/${checks.length} passed (${score}%)`, score >= 80 ? 'success' : 'warning');
     return { success: true, module: 'network', checks, passed, total: checks.length, score };
-  } catch (e: any) { return { success: false, error: e.message }; }
+  } catch (e: any) { emitAudit('network', 'scan-error', `Network scan failed: ${e.message}`, 'error'); return { success: false, error: e.message }; }
 });
 
 ipcMain.handle('sentinel-performance-scan', async () => {
   try {
+    emitAudit('performance', 'scan-start', 'Performance & Tuning scan started', 'info');
     const { enrichChecks } = await import('./services/scanners/mergeCheckDetails');
     const checks = enrichChecks(await runAllPerformanceChecks());
+    checks.forEach((c: any) => emitAudit('performance', 'check', `${c.status === 'pass' ? '✓' : c.status === 'warn' ? '⚠' : '✕'} ${c.name}`, c.status === 'pass' ? 'success' : c.status === 'warn' ? 'warning' : 'error', { checkId: c.id, status: c.status }));
     const passed = checks.filter((c: any) => c.status === 'pass').length;
     const score = Math.round((passed / checks.length) * 100);
+    emitAudit('performance', 'scan-done', `Performance scan complete: ${passed}/${checks.length} passed (${score}%)`, score >= 80 ? 'success' : 'warning');
     return { success: true, module: 'performance', checks, passed, total: checks.length, score };
-  } catch (e: any) { return { success: false, error: e.message }; }
+  } catch (e: any) { emitAudit('performance', 'scan-error', `Performance scan failed: ${e.message}`, 'error'); return { success: false, error: e.message }; }
 });
 
 ipcMain.handle('sentinel-privacy-scan', async () => {
   try {
+    emitAudit('privacy', 'scan-start', 'Privacy & Hardening scan started', 'info');
     const { enrichChecks } = await import('./services/scanners/mergeCheckDetails');
     const checks = enrichChecks(await runAllPrivacyChecks());
+    checks.forEach((c: any) => emitAudit('privacy', 'check', `${c.status === 'pass' ? '✓' : c.status === 'warn' ? '⚠' : '✕'} ${c.name}`, c.status === 'pass' ? 'success' : c.status === 'warn' ? 'warning' : 'error', { checkId: c.id, status: c.status }));
     const passed = checks.filter((c: any) => c.status === 'pass').length;
     const score = Math.round((passed / checks.length) * 100);
+    emitAudit('privacy', 'scan-done', `Privacy scan complete: ${passed}/${checks.length} passed (${score}%)`, score >= 80 ? 'success' : 'warning');
     return { success: true, module: 'privacy', checks, passed, total: checks.length, score };
-  } catch (e: any) { return { success: false, error: e.message }; }
+  } catch (e: any) { emitAudit('privacy', 'scan-error', `Privacy scan failed: ${e.message}`, 'error'); return { success: false, error: e.message }; }
 });
 
 ipcMain.handle('sentinel-set-scan-language', async (_event, lang: string) => {
@@ -1559,29 +1600,41 @@ ipcMain.handle('sentinel-full-scan', async () => {
   const send = (phase: string) => { try { mainWindow?.webContents.send('sentinel-scan-progress', { phase, elapsed: Date.now() - startTime }); } catch { /* window may be closed */ } };
 
   try {
+    emitAudit('scan', 'full-scan-start', 'Full Deep Scan started (101 checks across 5 modules)', 'info');
     const { enrichChecks } = await import('./services/scanners/mergeCheckDetails');
     const modScore = (arr: any[]) => { const p = arr.filter((c: any) => c.status === 'pass').length; return { checks: arr, passed: p, total: arr.length, score: Math.round((p / arr.length) * 100) }; };
+    const emitChecks = (mod: string, checks: any[]) => checks.forEach((c: any) => emitAudit(mod, 'check', `${c.status === 'pass' ? '\u2713' : c.status === 'warn' ? '\u26a0' : '\u2715'} ${c.name}`, c.status === 'pass' ? 'success' : c.status === 'warn' ? 'warning' : 'error', { checkId: c.id, status: c.status }));
     const elapsed = () => Date.now() - startTime;
     const timedOut = () => elapsed() >= SCAN_TIMEOUT_MS;
 
     send('kernel');
+    emitAudit('kernel', 'scan-start', 'Scanning Kernel & Firmware Integrity...', 'info');
     const kernel = enrichChecks(await runAllKernelChecks());
+    emitChecks('kernel', kernel);
     if (timedOut()) { const all = [...kernel]; const passed = all.filter((c: any) => c.status === 'pass').length; return { success: true, partial: true, score: Math.round((passed / all.length) * 100), total: all.length, passed, failed: all.filter((c: any) => c.status === 'fail').length, warnings: all.filter((c: any) => c.status === 'warn').length, modules: { kernel: modScore(kernel), edr: modScore([]), network: modScore([]), performance: modScore([]), privacy: modScore([]) }, timeoutMs: SCAN_TIMEOUT_MS }; }
 
     send('edr');
+    emitAudit('edr', 'scan-start', 'Scanning EDR & Behavioral Engine...', 'info');
     const edr = enrichChecks(await runAllEdrChecks());
+    emitChecks('edr', edr);
     if (timedOut()) { const all = [...kernel, ...edr]; const passed = all.filter((c: any) => c.status === 'pass').length; return { success: true, partial: true, score: Math.round((passed / all.length) * 100), total: all.length, passed, failed: all.filter((c: any) => c.status === 'fail').length, warnings: all.filter((c: any) => c.status === 'warn').length, modules: { kernel: modScore(kernel), edr: modScore(edr), network: modScore([]), performance: modScore([]), privacy: modScore([]) }, timeoutMs: SCAN_TIMEOUT_MS }; }
 
     send('network');
+    emitAudit('network', 'scan-start', 'Scanning Network & WFP Firewall...', 'info');
     const network = enrichChecks(await runAllNetworkChecks());
+    emitChecks('network', network);
     if (timedOut()) { const all = [...kernel, ...edr, ...network]; const passed = all.filter((c: any) => c.status === 'pass').length; return { success: true, partial: true, score: Math.round((passed / all.length) * 100), total: all.length, passed, failed: all.filter((c: any) => c.status === 'fail').length, warnings: all.filter((c: any) => c.status === 'warn').length, modules: { kernel: modScore(kernel), edr: modScore(edr), network: modScore(network), performance: modScore([]), privacy: modScore([]) }, timeoutMs: SCAN_TIMEOUT_MS }; }
 
     send('performance');
+    emitAudit('performance', 'scan-start', 'Scanning Performance & Tuning...', 'info');
     const performance = enrichChecks(await runAllPerformanceChecks());
+    emitChecks('performance', performance);
     if (timedOut()) { const all = [...kernel, ...edr, ...network, ...performance]; const passed = all.filter((c: any) => c.status === 'pass').length; return { success: true, partial: true, score: Math.round((passed / all.length) * 100), total: all.length, passed, failed: all.filter((c: any) => c.status === 'fail').length, warnings: all.filter((c: any) => c.status === 'warn').length, modules: { kernel: modScore(kernel), edr: modScore(edr), network: modScore(network), performance: modScore(performance), privacy: modScore([]) }, timeoutMs: SCAN_TIMEOUT_MS }; }
 
     send('privacy');
+    emitAudit('privacy', 'scan-start', 'Scanning Privacy & Hardening...', 'info');
     const privacy = enrichChecks(await runAllPrivacyChecks());
+    emitChecks('privacy', privacy);
 
     send('done');
     const all = [...kernel, ...edr, ...network, ...performance, ...privacy];
@@ -1589,11 +1642,12 @@ ipcMain.handle('sentinel-full-scan', async () => {
     const failed = all.filter((c: any) => c.status === 'fail').length;
     const warnings = all.filter((c: any) => c.status === 'warn').length;
     const score = Math.round((passed / all.length) * 100);
+    emitAudit('scan', 'full-scan-done', `Full Deep Scan complete: ${passed}/${all.length} passed — Score ${score}% (${Math.round(elapsed()/1000)}s)`, score >= 80 ? 'success' : 'warning');
     return {
       success: true, score, total: all.length, passed, failed, warnings, elapsedMs: elapsed(),
       modules: { kernel: modScore(kernel), edr: modScore(edr), network: modScore(network), performance: modScore(performance), privacy: modScore(privacy) },
     };
-  } catch (e: any) { return { success: false, error: e.message }; }
+  } catch (e: any) { emitAudit('scan', 'full-scan-error', `Full scan failed: ${e.message}`, 'error'); return { success: false, error: e.message }; }
 });
 
 // ============================================
@@ -1720,6 +1774,10 @@ const SCAN_FIX_COMMANDS: Record<string, { label: string; ps: string }> = {
 // SCAN RESULT PERSISTENCE — survive page nav + app restart
 // ════════════════════════════════════════════════════════════════
 
+ipcMain.handle('get-audit-log-buffer', async () => {
+  return { success: true, events: auditBuffer };
+});
+
 ipcMain.handle('scan-save-result', async (_event, scanType: string, data: unknown) => {
   try {
     const { saveScanResult } = await import('./services/scanResultStore');
@@ -1797,6 +1855,7 @@ ipcMain.handle('scan-apply-fix', async (_event, checkId: string) => {
   }
 
   const impact = getFixImpact(checkId, fix.label);
+  emitAudit('fix', 'fix-start', `Applying fix: ${fix.label} [${impact.dangerLevel}]`, impact.dangerLevel === 'dangerous' ? 'warning' : 'info', { checkId, danger: impact.dangerLevel });
 
   // ═══ SAFETY GATE 1.5: USB Storage pre-check ═══
   if (checkId === 'priv-usb') {
@@ -1848,6 +1907,7 @@ ipcMain.handle('scan-apply-fix', async (_event, checkId: string) => {
     // ╚════════════════════════════════════════════════════════════╝
     if (!connectivity.internet && impact.undoCommand) {
       console.error(`[SAFETY] Fix "${checkId}" broke internet! AUTO-REVERTING!`);
+      emitAudit('fix', 'auto-revert', `AUTO-REVERT: ${fix.label} — Internet connection broken, reverting...`, 'error', { checkId });
       const reverted = await autoRevert(impact.undoCommand);
       // Wait and verify
       await new Promise(resolve => setTimeout(resolve, 2000));
@@ -1868,6 +1928,7 @@ ipcMain.handle('scan-apply-fix', async (_event, checkId: string) => {
 
     if (!connectivity.dns && impact.affectsDNS && impact.undoCommand) {
       console.error(`[SAFETY] Fix "${checkId}" broke DNS! AUTO-REVERTING!`);
+      emitAudit('fix', 'auto-revert', `AUTO-REVERT: ${fix.label} — DNS resolution broken, reverting...`, 'error', { checkId });
       await autoRevert(impact.undoCommand);
       await new Promise(resolve => setTimeout(resolve, 2000));
 
@@ -1885,6 +1946,7 @@ ipcMain.handle('scan-apply-fix', async (_event, checkId: string) => {
 
     if (connectivity.firewallOutbound === 'BLOCK' && impact.undoCommand) {
       console.error(`[SAFETY] Fix "${checkId}" set outbound to BLOCK! AUTO-REVERTING!`);
+      emitAudit('fix', 'auto-revert', `AUTO-REVERT: ${fix.label} — Outbound traffic BLOCKED, reverting...`, 'error', { checkId });
       await autoRevert(impact.undoCommand);
       await new Promise(resolve => setTimeout(resolve, 1000));
 
@@ -1920,6 +1982,7 @@ ipcMain.handle('scan-apply-fix', async (_event, checkId: string) => {
     const { addActivityLog } = await import('./services/activityLog');
     addActivityLog('scan', 'fix-applied', `Applied fix: ${fix.label} [${impact.dangerLevel}]`, impact.dangerLevel === 'dangerous' ? 'warning' : 'info');
   } catch { /* log failure is non-critical */ }
+  emitAudit('fix', 'fix-done', `Fix applied: ${fix.label}`, 'success', { checkId, undoAvailable: Boolean(impact.undoCommand) });
 
   return {
     success: true,
@@ -1935,12 +1998,14 @@ ipcMain.handle('scan-undo-fix', async (_event, checkId: string) => {
   if (!isAdmin) {
     return { success: false, error: 'Administrator privileges required to undo fixes.' };
   }
+  emitAudit('fix', 'undo-start', `Undoing fix: ${checkId}`, 'info', { checkId });
   const { executeUndo, postFixConnectivityCheck } = await import('./services/shared/fixUndoStore');
   const result = await executeUndo(checkId);
 
   if (result.success) {
     // Verify connectivity after undo
     const connectivity = await postFixConnectivityCheck();
+    emitAudit('fix', 'undo-done', `Fix undone: ${checkId}`, 'success', { checkId });
     try {
       const { addActivityLog } = await import('./services/activityLog');
       addActivityLog('scan', 'fix-undone', `Undone fix: ${checkId}`, 'info');

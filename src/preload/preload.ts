@@ -497,6 +497,12 @@ const electronAPI = {
       ipcRenderer.on('activity-log-appended', wrapped);
       return () => ipcRenderer.removeListener('activity-log-appended', wrapped);
     },
+    onAuditEvent: (cb: (evt: { ts: number; module: string; action: string; message: string; severity: string; meta?: Record<string, unknown> }) => void) => {
+      const wrapped = (_event: Electron.IpcRendererEvent, evt: any) => cb(evt);
+      ipcRenderer.on('sentinel-audit-event', wrapped);
+      return () => ipcRenderer.removeListener('sentinel-audit-event', wrapped);
+    },
+    getAuditBuffer: () => ipcRenderer.invoke('get-audit-log-buffer'),
   },
 
   // Platform info
