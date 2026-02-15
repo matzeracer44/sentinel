@@ -1,21 +1,21 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Sentinel Security Suite — Automatisches Setup-Skript
-    Installiert alle Abhängigkeiten und baut Sentinel auf jedem Windows-System.
+    Sentinel Security Suite - Automatisches Setup-Skript
+    Installiert alle Abhaengigkeiten und baut Sentinel auf jedem Windows-System.
 
 .DESCRIPTION
     Dieses Skript:
-    1. Prüft Systemvoraussetzungen (Windows 10+, PowerShell 5.1+)
+    1. Prueft Systemvoraussetzungen (Windows 10+, PowerShell 5.1+)
     2. Installiert Node.js (LTS) falls nicht vorhanden
-    3. Installiert Python 3.x falls nicht vorhanden (für ARGUS Backend)
-    4. Installiert npm-Abhängigkeiten
+    3. Installiert Python 3.x falls nicht vorhanden (fuer ARGUS Backend)
+    4. Installiert npm-Abhaengigkeiten
     5. Erstellt die .env-Datei aus .env.example
     6. Baut Sentinel (TypeScript + Webpack)
     7. Startet Sentinel
 
 .NOTES
-    Ausführen: PowerShell als Administrator öffnen, dann:
+    Ausfuehren: PowerShell als Administrator oeffnen, dann:
     Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
     .\setup.ps1
 #>
@@ -30,9 +30,9 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-# ═══════════════════════════════════════════
+# =============================================
 # FARBEN & AUSGABE
-# ═══════════════════════════════════════════
+# =============================================
 
 function Write-Step($msg) { Write-Host "`n[SENTINEL] $msg" -ForegroundColor Cyan }
 function Write-Ok($msg)   { Write-Host "  [OK] $msg" -ForegroundColor Green }
@@ -40,20 +40,20 @@ function Write-Warn($msg) { Write-Host "  [!!] $msg" -ForegroundColor Yellow }
 function Write-Fail($msg) { Write-Host "  [FEHLER] $msg" -ForegroundColor Red }
 function Write-Info($msg) { Write-Host "  $msg" -ForegroundColor Gray }
 
-# ═══════════════════════════════════════════
+# =============================================
 # BANNER
-# ═══════════════════════════════════════════
+# =============================================
 
 Write-Host ""
-Write-Host "  ╔═══════════════════════════════════════════════╗" -ForegroundColor Cyan
-Write-Host "  ║         SENTINEL SECURITY SUITE               ║" -ForegroundColor Cyan
-Write-Host "  ║         Automatisches Setup v3.0               ║" -ForegroundColor Cyan
-Write-Host "  ╚═══════════════════════════════════════════════╝" -ForegroundColor Cyan
+Write-Host "  +=============================================+" -ForegroundColor Cyan
+Write-Host "  |         SENTINEL SECURITY SUITE              |" -ForegroundColor Cyan
+Write-Host "  |         Automatisches Setup v3.0              |" -ForegroundColor Cyan
+Write-Host "  +=============================================+" -ForegroundColor Cyan
 Write-Host ""
 
-# ═══════════════════════════════════════════
+# =============================================
 # 1. SYSTEMVORAUSSETZUNGEN
-# ═══════════════════════════════════════════
+# =============================================
 
 Write-Step "Pruefe Systemvoraussetzungen..."
 
@@ -73,19 +73,19 @@ if ($psVer.Major -lt 5) {
 }
 Write-Ok "PowerShell $psVer"
 
-# Admin-Rechte prüfen
+# Admin-Rechte pruefen
 $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if ($isAdmin) {
     Write-Ok "Administrator-Rechte vorhanden"
 } else {
-    Write-Warn "Kein Administrator — einige Sentinel-Features benoetigen Admin-Rechte"
+    Write-Warn "Kein Administrator - einige Sentinel-Features benoetigen Admin-Rechte"
     Write-Info "Sentinel kann ohne Admin installiert werden, aber fuer volle Funktionalitaet:"
     Write-Info "  Rechtsklick auf PowerShell -> 'Als Administrator ausfuehren'"
 }
 
-# ═══════════════════════════════════════════
+# =============================================
 # 2. NODE.JS
-# ═══════════════════════════════════════════
+# =============================================
 
 Write-Step "Pruefe Node.js..."
 
@@ -163,7 +163,7 @@ if (-not $nodeInstalled -and -not $SkipNodeInstall) {
     exit 1
 }
 
-# npm prüfen
+# npm pruefen
 try {
     $npmVersion = & npm --version 2>$null
     Write-Ok "npm $npmVersion"
@@ -172,9 +172,9 @@ try {
     exit 1
 }
 
-# ═══════════════════════════════════════════
-# 3. PYTHON (für ARGUS Backend)
-# ═══════════════════════════════════════════
+# =============================================
+# 3. PYTHON (fuer ARGUS Backend)
+# =============================================
 
 Write-Step "Pruefe Python (fuer ARGUS Backend)..."
 
@@ -214,12 +214,12 @@ if (-not $pythonInstalled -and -not $SkipPythonInstall) {
         Write-Info "Manuell installieren: https://www.python.org/downloads/"
     }
 } elseif (-not $pythonInstalled) {
-    Write-Warn "Python nicht gefunden — ARGUS Backend nicht verfuegbar"
+    Write-Warn "Python nicht gefunden - ARGUS Backend nicht verfuegbar"
 }
 
-# ═══════════════════════════════════════════
+# =============================================
 # 4. PROJEKTVERZEICHNIS
-# ═══════════════════════════════════════════
+# =============================================
 
 Write-Step "Pruefe Projektverzeichnis..."
 
@@ -235,9 +235,9 @@ if (-not (Test-Path $packageJson)) {
 
 Write-Ok "Projektverzeichnis: $projectRoot"
 
-# ═══════════════════════════════════════════
+# =============================================
 # 5. .ENV DATEI
-# ═══════════════════════════════════════════
+# =============================================
 
 Write-Step "Pruefe .env Konfiguration..."
 
@@ -250,21 +250,21 @@ if (Test-Path $envFile) {
     Copy-Item $envExample $envFile
     Write-Ok ".env aus .env.example erstellt"
     Write-Info "Bitte API-Keys in .env eintragen (siehe docs/API_KEYS_GUIDE.md)"
-    Write-Info "Sentinel funktioniert auch ohne API-Keys — nur externe IP-Lookups sind deaktiviert."
+    Write-Info "Sentinel funktioniert auch ohne API-Keys - nur externe IP-Lookups sind deaktiviert."
 } else {
-    Write-Warn "Keine .env.example gefunden — erstelle leere .env"
-    "# Sentinel API Keys — siehe docs/API_KEYS_GUIDE.md" | Out-File $envFile -Encoding utf8
+    Write-Warn "Keine .env.example gefunden - erstelle leere .env"
+    "# Sentinel API Keys - siehe docs/API_KEYS_GUIDE.md" | Out-File $envFile -Encoding utf8
 }
 
-# ═══════════════════════════════════════════
-# 6. NPM ABHÄNGIGKEITEN
-# ═══════════════════════════════════════════
+# =============================================
+# 6. NPM ABHAENGIGKEITEN
+# =============================================
 
 Write-Step "Installiere npm-Abhaengigkeiten..."
 
 $nodeModules = Join-Path $projectRoot "node_modules"
 if (Test-Path $nodeModules) {
-    Write-Info "node_modules existiert bereits — pruefe auf Updates..."
+    Write-Info "node_modules existiert bereits - pruefe auf Updates..."
 }
 
 try {
@@ -280,7 +280,7 @@ try {
     Pop-Location
 }
 
-# Native Module (better-sqlite3) rebuild für Electron
+# Native Module (better-sqlite3) rebuild fuer Electron
 Write-Step "Rebuilde native Module fuer Electron..."
 try {
     Push-Location $projectRoot
@@ -289,15 +289,15 @@ try {
     }
     Write-Ok "Native Module fuer Electron gebaut (better-sqlite3, classic-level)"
 } catch {
-    Write-Warn "Native-Module-Rebuild fehlgeschlagen — SQLite-Features koennten eingeschraenkt sein"
+    Write-Warn "Native-Module-Rebuild fehlgeschlagen - SQLite-Features koennten eingeschraenkt sein"
     Write-Info "Manuell versuchen: npx @electron/rebuild -f -w better-sqlite3 classic-level"
 } finally {
     Pop-Location
 }
 
-# ═══════════════════════════════════════════
+# =============================================
 # 7. ARGUS BACKEND (Python)
-# ═══════════════════════════════════════════
+# =============================================
 
 $argusDir = Join-Path $projectRoot "ARGUS"
 if ((Test-Path $argusDir) -and $pythonInstalled) {
@@ -327,9 +327,9 @@ if ((Test-Path $argusDir) -and $pythonInstalled) {
     Write-Info "ARGUS Backend uebersprungen (Python nicht verfuegbar oder ARGUS-Ordner fehlt)"
 }
 
-# ═══════════════════════════════════════════
+# =============================================
 # 8. BUILD
-# ═══════════════════════════════════════════
+# =============================================
 
 if (-not $SkipBuild) {
     Write-Step "Baue Sentinel (TypeScript + Webpack)..."
@@ -349,12 +349,12 @@ if (-not $SkipBuild) {
             if ($_ -match "compiled|error|ERROR") { Write-Info $_ }
         }
         
-        # Prüfe ob dist existiert
+        # Pruefe ob dist existiert
         $distMain = Join-Path $projectRoot "dist\main\main.js"
         if (Test-Path $distMain) {
-            Write-Ok "Build erfolgreich — dist/main/main.js erstellt"
+            Write-Ok "Build erfolgreich - dist/main/main.js erstellt"
         } else {
-            Write-Fail "Build fehlgeschlagen — dist/main/main.js nicht gefunden"
+            Write-Fail "Build fehlgeschlagen - dist/main/main.js nicht gefunden"
             exit 1
         }
     } catch {
@@ -367,20 +367,20 @@ if (-not $SkipBuild) {
     Write-Info "Build uebersprungen (--SkipBuild)"
 }
 
-# ═══════════════════════════════════════════
+# =============================================
 # 9. FERTIG
-# ═══════════════════════════════════════════
+# =============================================
 
 Write-Host ""
-Write-Host "  ╔═══════════════════════════════════════════════╗" -ForegroundColor Green
-Write-Host "  ║         SENTINEL SETUP ABGESCHLOSSEN          ║" -ForegroundColor Green
-Write-Host "  ╚═══════════════════════════════════════════════╝" -ForegroundColor Green
+Write-Host "  +=============================================+" -ForegroundColor Green
+Write-Host "  |         SENTINEL SETUP ABGESCHLOSSEN         |" -ForegroundColor Green
+Write-Host "  +=============================================+" -ForegroundColor Green
 Write-Host ""
 Write-Ok "Sentinel ist bereit!"
 Write-Host ""
 Write-Info "Starten mit:"
-Write-Info "  npm start                    — Sentinel starten"
-Write-Info "  npm run dev                  — Build + Start"
+Write-Info "  npm start                    - Sentinel starten"
+Write-Info "  npm run dev                  - Build + Start"
 Write-Info ""
 Write-Info "Als Administrator starten (empfohlen):"
 Write-Info "  Rechtsklick PowerShell -> 'Als Administrator ausfuehren'"
@@ -389,7 +389,7 @@ Write-Info "  npm start"
 Write-Host ""
 Write-Info "API-Keys konfigurieren:"
 Write-Info "  Bearbeite .env (siehe docs/API_KEYS_GUIDE.md)"
-Write-Info "  Sentinel funktioniert auch ohne Keys — nur IP-Lookups sind dann deaktiviert."
+Write-Info "  Sentinel funktioniert auch ohne Keys - nur IP-Lookups sind dann deaktiviert."
 Write-Host ""
 
 # Auto-Start
