@@ -1717,6 +1717,42 @@ const SCAN_FIX_COMMANDS: Record<string, { label: string; ps: string }> = {
 };
 
 // ════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════
+// SCAN RESULT PERSISTENCE — survive page nav + app restart
+// ════════════════════════════════════════════════════════════════
+
+ipcMain.handle('scan-save-result', async (_event, scanType: string, data: unknown) => {
+  try {
+    const { saveScanResult } = await import('./services/scanResultStore');
+    saveScanResult(scanType, data);
+    return { success: true };
+  } catch (e: any) { return { success: false, error: e?.message }; }
+});
+
+ipcMain.handle('scan-load-result', async (_event, scanType: string) => {
+  try {
+    const { loadScanResult } = await import('./services/scanResultStore');
+    const entry = loadScanResult(scanType);
+    return { success: true, entry };
+  } catch (e: any) { return { success: false, error: e?.message }; }
+});
+
+ipcMain.handle('scan-load-all-results', async () => {
+  try {
+    const { loadAllScanResults } = await import('./services/scanResultStore');
+    const results = loadAllScanResults();
+    return { success: true, results };
+  } catch (e: any) { return { success: false, error: e?.message }; }
+});
+
+ipcMain.handle('scan-clear-result', async (_event, scanType: string) => {
+  try {
+    const { clearScanResult } = await import('./services/scanResultStore');
+    clearScanResult(scanType);
+    return { success: true };
+  } catch (e: any) { return { success: false, error: e?.message }; }
+});
+
 // SCAN FIX SAFETY SYSTEM — Born from a real incident
 // "Apply Fix" set outbound to BLOCK → no internet, no undo. NEVER AGAIN.
 // ════════════════════════════════════════════════════════════════

@@ -87,12 +87,23 @@ const DnsPage: React.FC = () => {
 
   useEffect(() => { fetchData(); fetchHosts(); }, [fetchData, fetchHosts]);
 
+  // Restore persisted privacy scan result on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await api()?.shield?.loadScanResult?.('privacyScan');
+        if (r?.success && r.entry?.data) setPrivResult(r.entry.data as any);
+      } catch { /* no persisted result */ }
+    })();
+  }, []);
+
   const handlePrivacyScan = useCallback(async () => {
     setPrivScanning(true);
     try {
       const r = await api()?.shield?.privacyScan?.();
       if (r?.success) {
         setPrivResult(r as any);
+        try { await api()?.shield?.saveScanResult?.('privacyScan', r); } catch { /* best-effort */ }
         notify.success(`Privacy scan: ${r.passed}/${r.total} passed (${r.score}%)`);
       } else {
         notify.error(r?.error || 'Privacy scan failed');

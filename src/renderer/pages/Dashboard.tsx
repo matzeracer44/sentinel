@@ -131,6 +131,16 @@ const Dashboard: React.FC = () => {
     return () => clearInterval(interval);
   }, [fetchData]);
 
+  // Restore persisted scan result on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await api()?.shield?.loadScanResult?.('fullScan');
+        if (r?.success && r.entry?.data) setScanResult(r.entry.data as FullScanResult);
+      } catch { /* no persisted result */ }
+    })();
+  }, []);
+
   // Real-time push notifications from Main process
   useEffect(() => {
     const a = api();
@@ -192,6 +202,7 @@ const Dashboard: React.FC = () => {
       const r = await Promise.race([scanPromise, timeout]) as any;
       if (r?.success) {
         setScanResult(r as FullScanResult);
+        try { await api()?.shield?.saveScanResult?.('fullScan', r); } catch { /* best-effort persist */ }
         notify.success(`Full scan complete: ${r.passed}/${r.total} passed — Score ${r.score}%`);
       } else {
         const errMsg = r?.error || 'Scan returned no results';

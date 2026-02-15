@@ -107,6 +107,21 @@ const NetworkPage: React.FC = () => {
     return () => clearInterval(i);
   }, [fetchData]);
 
+  // Restore persisted scan results on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const a = api();
+        const [netR, edrR] = await Promise.all([
+          a?.shield?.loadScanResult?.('networkScan'),
+          a?.shield?.loadScanResult?.('edrScan'),
+        ]);
+        if (netR?.success && netR.entry?.data) setNetScanResult(netR.entry.data as any);
+        if (edrR?.success && edrR.entry?.data) setEdrScanResult(edrR.entry.data as any);
+      } catch { /* no persisted results */ }
+    })();
+  }, []);
+
   // ─── Row actions ───
   const handleBlockIp = async (ip: string) => {
     if (isLocal(ip)) return;
@@ -169,6 +184,7 @@ const NetworkPage: React.FC = () => {
       const r = await api()?.shield?.networkScan?.();
       if (r?.success) {
         setNetScanResult(r as any);
+        try { await api()?.shield?.saveScanResult?.('networkScan', r); } catch { /* best-effort */ }
         notify.success(`Network scan complete: ${r.passed}/${r.total} passed (${r.score}%)`);
       } else {
         notify.error(r?.error || 'Network scan failed');
@@ -183,6 +199,7 @@ const NetworkPage: React.FC = () => {
       const r = await api()?.shield?.edrScan?.();
       if (r?.success) {
         setEdrScanResult(r as any);
+        try { await api()?.shield?.saveScanResult?.('edrScan', r); } catch { /* best-effort */ }
         notify.success(`EDR scan complete: ${r.passed}/${r.total} passed (${r.score}%)`);
       } else {
         notify.error(r?.error || 'EDR scan failed');

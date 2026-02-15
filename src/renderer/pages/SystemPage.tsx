@@ -135,12 +135,28 @@ const SystemPage: React.FC = () => {
 
   useEffect(() => { fetchData(); fetchHardware(); const i = setInterval(fetchData, 5000); return () => clearInterval(i); }, [fetchData, fetchHardware]);
 
+  // Restore persisted scan results on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const a = api();
+        const [perfR, kernelR] = await Promise.all([
+          a?.shield?.loadScanResult?.('performanceScan'),
+          a?.shield?.loadScanResult?.('kernelScan'),
+        ]);
+        if (perfR?.success && perfR.entry?.data) setPerfResult(perfR.entry.data as ModuleScanResult);
+        if (kernelR?.success && kernelR.entry?.data) setKernelResult(kernelR.entry.data as ModuleScanResult);
+      } catch { /* no persisted results */ }
+    })();
+  }, []);
+
   const handlePerfScan = useCallback(async () => {
     setPerfScanning(true);
     try {
       const r = await api()?.shield?.performanceScan?.();
       if (r?.success) {
         setPerfResult(r as ModuleScanResult);
+        try { await api()?.shield?.saveScanResult?.('performanceScan', r); } catch { /* best-effort */ }
         notify.success(`Performance scan: ${r.passed}/${r.total} passed (${r.score}%)`);
         setTimeout(() => perfRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
       } else {
@@ -156,6 +172,7 @@ const SystemPage: React.FC = () => {
       const r = await api()?.shield?.kernelScan?.();
       if (r?.success) {
         setKernelResult(r as ModuleScanResult);
+        try { await api()?.shield?.saveScanResult?.('kernelScan', r); } catch { /* best-effort */ }
         notify.success(`Kernel scan: ${r.passed}/${r.total} passed (${r.score}%)`);
         setTimeout(() => kernelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
       } else {

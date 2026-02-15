@@ -219,6 +219,12 @@ const electronAPI = {
     undoFix: (checkId: string) => ipcRenderer.invoke('scan-undo-fix', checkId),
     getUndos: () => ipcRenderer.invoke('scan-get-undos'),
 
+    // Scan Result Persistence
+    saveScanResult: (scanType: string, data: unknown) => ipcRenderer.invoke('scan-save-result', scanType, data),
+    loadScanResult: (scanType: string) => ipcRenderer.invoke('scan-load-result', scanType),
+    loadAllScanResults: () => ipcRenderer.invoke('scan-load-all-results'),
+    clearScanResult: (scanType: string) => ipcRenderer.invoke('scan-clear-result', scanType),
+
     // Phase 4 — New Feature Scans
     vpnGetStatus: () => ipcRenderer.invoke('sentinel-vpn-get-status'),
     hardeningAudit: () => ipcRenderer.invoke('sentinel-hardening-run-audit'),
