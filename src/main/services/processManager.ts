@@ -13,12 +13,11 @@ function sanitizePSArg(input: string): string {
 }
 
 async function execPowerShell(command: string): Promise<string> {
-  const encoded = Buffer.from(command, 'utf16le').toString('base64');
   const opts = getExecOptions();
   try {
     const { stdout } = await execFileAsync(
-      'powershell',
-      ['-NoLogo', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-NoProfile', '-EncodedCommand', encoded],
+      'powershell.exe',
+      ['-NoLogo', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-NoProfile', '-Command', command],
       opts,
     ) as { stdout: string };
     return (stdout || '').trim();

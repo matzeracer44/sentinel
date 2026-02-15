@@ -26,6 +26,7 @@ import {
 import { getNetworkTrafficSnapshot, getFullNetworkAudit } from '../services/networkMonitor';
 import { isExternalIpLookupAllowed } from '../services/sentinelConfig';
 import { killProcess as killProcessService, getSentinelRules, getBlockedIPs, IPBlockInfo } from '../services/shieldData';
+import { runPowerShellSafe } from '../services/execOptions';
 
 
 interface SentinelFirewallRule {
@@ -400,12 +401,7 @@ Get-Process | Where-Object { $_.Id -gt 0 } | ForEach-Object {
   $st=$null; try{if($_.StartTime){$st=$_.StartTime.ToString('o')}}catch{}
   [PSCustomObject]@{PID=$_.Id;Name=$_.ProcessName;CPUms=$cpuMs;RamMB=$ramMB;Threads=$tc;Handles=$hc;Path=$pp;Description=$dd;Company=$cc;StartTime=$st}
 } | ConvertTo-Json -Compress`;
-      const encoded = Buffer.from(psScript, 'utf16le').toString('base64');
-      const raw = await new Promise<string>((resolve, reject) => {
-        execFile('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded],
-          { encoding: 'utf-8', windowsHide: true, timeout: 12000, maxBuffer: 10 * 1024 * 1024 },
-          (err, stdout) => err ? reject(err) : resolve(stdout));
-      });
+      const raw = await runPowerShellSafe(psScript, { timeout: 12000, maxBuffer: 10 * 1024 * 1024 });
       let parsed = JSON.parse((raw || '[]').trim());
       if (!Array.isArray(parsed)) parsed = parsed ? [parsed] : [];
 

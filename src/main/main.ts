@@ -1167,12 +1167,8 @@ $net=Get-NetAdapter|Where-Object{$_.Status -eq 'Up'}|ForEach-Object{
 $b=Get-CimInstance Win32_Battery -EA SilentlyContinue|Select-Object -First 1
 $bat=if($b){[PSCustomObject]@{status=$b.Status;percentage=$b.EstimatedChargeRemaining}}else{[PSCustomObject]@{status='No Battery';percentage=0}}
 [PSCustomObject]@{disks=@($disks);gpu=@($gpu);network=@($net);battery=$bat}|ConvertTo-Json -Depth 3 -Compress`;
-      const encoded = Buffer.from(psScript, 'utf16le').toString('base64');
-      const raw = await new Promise<string>((resolve, reject) => {
-        execF('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded],
-          { timeout: 15000, windowsHide: true, encoding: 'utf8', maxBuffer: 5 * 1024 * 1024 },
-          (err: any, stdout: string) => err ? reject(err) : resolve(stdout));
-      });
+      const { runPowerShellSafe } = await import('./services/execOptions');
+      const raw = await runPowerShellSafe(psScript, { timeout: 15000, maxBuffer: 5 * 1024 * 1024 });
       const parsed = JSON.parse((raw || '{}').trim());
       if (Array.isArray(parsed.disks)) disks = parsed.disks;
       if (Array.isArray(parsed.gpu)) gpu = parsed.gpu;
@@ -1306,13 +1302,8 @@ ipcMain.handle('execute-quick-action', async (_event, action: string) => {
     const actions: string[] = [];
 
     const runPS = async (cmd: string, timeout = 15000): Promise<string> => {
-      const { execFile: ef } = require('child_process');
-      const enc = Buffer.from(cmd, 'utf16le').toString('base64');
-      return new Promise<string>((resolve, reject) => {
-        ef('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', enc],
-          { timeout, windowsHide: true, encoding: 'utf8' },
-          (err: any, stdout: string) => err ? reject(err) : resolve(stdout || ''));
-      });
+      const { runPowerShellSafe } = await import('./services/execOptions');
+      return runPowerShellSafe(cmd, { timeout });
     };
     const runCmd = async (cmd: string): Promise<void> => { await execPromise(cmd, { windowsHide: true, timeout: 10000 }); };
 
@@ -1377,14 +1368,9 @@ ipcMain.handle('get-system-health', async () => {
     // Real security score: check if firewall is enabled
     let securityScore = 50; // base
     try {
-      const { execFile: ef } = require('child_process');
+      const { runPowerShellSafe: runPS_fw } = await import('./services/execOptions');
       const psCmd = '(Get-NetFirewallProfile|Where-Object{$_.Enabled -eq $true}).Count';
-      const enc = Buffer.from(psCmd, 'utf16le').toString('base64');
-      const fwStatus = (await new Promise<string>((resolve, reject) => {
-        ef('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', enc],
-          { timeout: 5000, windowsHide: true, encoding: 'utf8' },
-          (err: any, stdout: string) => err ? reject(err) : resolve(stdout));
-      })).trim();
+      const fwStatus = (await runPS_fw(psCmd, { timeout: 5000 })).trim();
       const enabledProfiles = parseInt(fwStatus, 10);
       if (enabledProfiles >= 3) securityScore = 95;
       else if (enabledProfiles >= 2) securityScore = 80;
@@ -1394,14 +1380,9 @@ ipcMain.handle('get-system-health', async () => {
     // Real privacy score: check if telemetry is restricted
     let privacyScore = 60; // base
     try {
-      const { execFile: ef } = require('child_process');
-      const psCmd2 = '(Get-ItemProperty -Path HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection -Name AllowTelemetry -EA SilentlyContinue).AllowTelemetry';
-      const enc2 = Buffer.from(psCmd2, 'utf16le').toString('base64');
-      const telemetry = (await new Promise<string>((resolve, reject) => {
-        ef('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', enc2],
-          { timeout: 3000, windowsHide: true, encoding: 'utf8' },
-          (err: any, stdout: string) => err ? reject(err) : resolve(stdout));
-      })).trim();
+      const { runPowerShellSafe: runPS_tel } = await import('./services/execOptions');
+      const psCmd2 = '(Get-ItemProperty -Path HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\DataCollection -Name AllowTelemetry -EA SilentlyContinue).AllowTelemetry';
+      const telemetry = (await runPS_tel(psCmd2, { timeout: 3000 })).trim();
       const level = parseInt(telemetry, 10);
       if (level === 0) privacyScore = 95;
       else if (level === 1) privacyScore = 80;
@@ -1448,14 +1429,9 @@ ipcMain.handle('get-system-stats', async () => {
     // Real disk usage
     let diskPercent = -1;
     try {
-      const { execFile: ef } = require('child_process');
+      const { runPowerShellSafe: runPS_disk } = await import('./services/execOptions');
       const psCmd = '(Get-PSDrive C).Used/((Get-PSDrive C).Used+(Get-PSDrive C).Free)*100';
-      const enc = Buffer.from(psCmd, 'utf16le').toString('base64');
-      const diskOut = (await new Promise<string>((resolve, reject) => {
-        ef('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', enc],
-          { timeout: 5000, windowsHide: true, encoding: 'utf8' },
-          (err: any, stdout: string) => err ? reject(err) : resolve(stdout));
-      })).trim();
+      const diskOut = (await runPS_disk(psCmd, { timeout: 5000 })).trim();
       diskPercent = Math.round(parseFloat(diskOut));
       if (isNaN(diskPercent)) diskPercent = -1;
     } catch { diskPercent = -1; }
@@ -1790,14 +1766,9 @@ ipcMain.handle('scan-apply-fix', async (_event, checkId: string) => {
   // ═══ SAFETY GATE 1.5: USB Storage pre-check ═══
   if (checkId === 'priv-usb') {
     try {
-      const { execFile: execFUsb } = require('child_process');
+      const { runPowerShellSafe: runPS_usb } = await import('./services/execOptions');
       const usbPs = `$usbDisks = Get-Disk | Where-Object { $_.BusType -eq 'USB' }; $cwd = (Get-Item .).PSDrive.Name + ':'; $cwdDisk = Get-Partition -DriveLetter $cwd.Substring(0,1) -EA SilentlyContinue | Get-Disk -EA SilentlyContinue; $onUsb = if($cwdDisk -and $cwdDisk.BusType -eq 'USB'){$true}else{$false}; [PSCustomObject]@{ Count=$usbDisks.Count; OnUsb=$onUsb; Names=($usbDisks.FriendlyName -join ', ') } | ConvertTo-Json -Compress`;
-      const usbEncoded = Buffer.from(usbPs, 'utf16le').toString('base64');
-      const usbCheck = await new Promise<string>((resolve, reject) => {
-        execFUsb('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', usbEncoded],
-          { timeout: 8000, windowsHide: true, encoding: 'utf8' },
-          (err: any, stdout: string) => err ? reject(err) : resolve((stdout || '').trim()));
-      });
+      const usbCheck = await runPS_usb(usbPs, { timeout: 8000 });
       if (usbCheck) {
         const usbData = JSON.parse(usbCheck);
         if (usbData.OnUsb) {
@@ -1823,18 +1794,8 @@ ipcMain.handle('scan-apply-fix', async (_event, checkId: string) => {
 
   // ═══ EXECUTE FIX ═══
   try {
-    const { execFile: execF } = require('child_process');
-    const encoded = Buffer.from(fix.ps, 'utf16le').toString('base64');
-    await new Promise<string>((resolve, reject) => {
-      execF('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded],
-        { timeout: 60000, windowsHide: true, encoding: 'utf8', maxBuffer: 5 * 1024 * 1024 },
-        (err: any, stdout: string, stderr: string) => {
-          if (err) {
-            const msg = stderr?.trim() || err?.message || 'Fix command failed';
-            reject(new Error(msg));
-          } else { resolve(stdout); }
-        });
-    });
+    const { runPowerShellSafe: runPS_fix } = await import('./services/execOptions');
+    await runPS_fix(fix.ps, { timeout: 60000, maxBuffer: 5 * 1024 * 1024 });
   } catch (err: any) {
     return { success: false, error: err?.message || 'Fix command failed', label: fix.label, checkId };
   }
@@ -2913,12 +2874,8 @@ Get-ScheduledTask|Where-Object{$_.State -eq 'Ready' -and $_.Actions.Count -gt 0}
 $boot=(Get-CimInstance Win32_OperatingSystem).LastBootUpTime;$uptime=[math]::Round(((Get-Date)-$boot).TotalSeconds)
 $unique=$all|Sort-Object name -Unique
 @{items=$unique;bootSeconds=$uptime}|ConvertTo-Json -Depth 3 -Compress`;
-    const encoded = Buffer.from(psScript, 'utf16le').toString('base64');
-    const output = await new Promise<string>((resolve, reject) => {
-      execF('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded],
-        { timeout: 20000, windowsHide: true, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 },
-        (err: any, stdout: string) => err ? reject(err) : resolve((stdout || '').trim()));
-    });
+    const { runPowerShellSafe } = await import('./services/execOptions');
+    const output = await runPowerShellSafe(psScript, { timeout: 20000, maxBuffer: 10 * 1024 * 1024 });
     if (!output) return { success: true, items: [], currentBootTime: -1 };
 
     const parsed = JSON.parse(output);
@@ -2959,12 +2916,8 @@ ipcMain.handle('forge-get-windows-services', async () => {
     const psScript = `$ErrorActionPreference='SilentlyContinue'
 $wmiMap=@{};Get-CimInstance Win32_Service|ForEach-Object{$wmiMap[$_.Name]=$_.PathName}
 Get-Service|ForEach-Object{[PSCustomObject]@{name=$_.Name;displayName=$_.DisplayName;status=$_.Status.ToString();startType=$_.StartType.ToString();path=if($wmiMap.ContainsKey($_.Name)){$wmiMap[$_.Name]}else{''}}}|ConvertTo-Json -Depth 2 -Compress`;
-    const encoded = Buffer.from(psScript, 'utf16le').toString('base64');
-    const output = await new Promise<string>((resolve, reject) => {
-      execF('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded],
-        { timeout: 25000, windowsHide: true, encoding: 'utf8', maxBuffer: 20 * 1024 * 1024 },
-        (err: any, stdout: string) => err ? reject(err) : resolve((stdout || '').trim()));
-    });
+    const { runPowerShellSafe } = await import('./services/execOptions');
+    const output = await runPowerShellSafe(psScript, { timeout: 25000, maxBuffer: 20 * 1024 * 1024 });
     if (!output) return { success: true, services: [] };
     let services = JSON.parse(output);
     if (!Array.isArray(services)) services = services ? [services] : [];
@@ -3148,12 +3101,8 @@ ipcMain.handle('sentinel-eventlog-get-security', async () => {
     const { execFile: execF } = require('child_process');
     const psScript = `$ErrorActionPreference='SilentlyContinue'
 Get-WinEvent -LogName Security -MaxEvents 200|ForEach-Object{[PSCustomObject]@{id=$_.Id;timeCreated=$_.TimeCreated.ToString('o');level=$_.LevelDisplayName;message=($_.Message -split '\n')[0];provider=$_.ProviderName}}|ConvertTo-Json -Depth 2 -Compress`;
-    const encoded = Buffer.from(psScript, 'utf16le').toString('base64');
-    const output = await new Promise<string>((resolve, reject) => {
-      execF('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded],
-        { timeout: 15000, windowsHide: true, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 },
-        (err: any, stdout: string) => err ? reject(err) : resolve((stdout || '').trim()));
-    });
+    const { runPowerShellSafe } = await import('./services/execOptions');
+    const output = await runPowerShellSafe(psScript, { timeout: 15000, maxBuffer: 10 * 1024 * 1024 });
     if (!output) return { success: true, events: [] };
     let events = JSON.parse(output);
     if (!Array.isArray(events)) events = events ? [events] : [];
@@ -3172,12 +3121,8 @@ $events=Get-WinEvent -LogName Security -MaxEvents 5000|Where-Object{$suspiciousI
   $risk='medium';if($_.Id -eq 4625){$risk='high'};if($_.Id -eq 7045){$risk='high'};if($_.Id -eq 1102){$risk='critical'};if($_.Id -eq 4672){$risk='medium'}
   [PSCustomObject]@{id=$_.Id;timeCreated=$_.TimeCreated.ToString('o');level=$_.LevelDisplayName;message=($_.Message -split '\n')[0];provider=$_.ProviderName;risk=$risk;eventType=switch($_.Id){4625{'Failed Login'}4672{'Privilege Escalation'}4688{'Process Created'}7045{'Service Installed'}4720{'Account Created'}4732{'Group Membership Changed'}1102{'Audit Log Cleared'}default{'Suspicious'}}}}
 $events|ConvertTo-Json -Depth 2 -Compress`;
-    const encoded = Buffer.from(psScript, 'utf16le').toString('base64');
-    const output = await new Promise<string>((resolve, reject) => {
-      execF('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded],
-        { timeout: 20000, windowsHide: true, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 },
-        (err: any, stdout: string) => err ? reject(err) : resolve((stdout || '').trim()));
-    });
+    const { runPowerShellSafe } = await import('./services/execOptions');
+    const output = await runPowerShellSafe(psScript, { timeout: 20000, maxBuffer: 10 * 1024 * 1024 });
     if (!output) return { success: true, alerts: [] };
     let alerts = JSON.parse(output);
     if (!Array.isArray(alerts)) alerts = alerts ? [alerts] : [];
@@ -3204,12 +3149,8 @@ $total++;$bl=Get-BitLockerVolume -MountPoint 'C:' -EA SilentlyContinue;$blOk=($b
 $total++;$sb=Confirm-SecureBootUEFI -EA SilentlyContinue;$sbOk=($sb -eq $true);if($sbOk){$passed++};$checks+=[PSCustomObject]@{name='Secure Boot Enabled';passed=$sbOk;category='Boot'}
 $score=if($total -gt 0){[math]::Round(($passed/$total)*100)}else{0}
 [PSCustomObject]@{score=$score;passed=$passed;total=$total;checks=$checks}|ConvertTo-Json -Depth 3 -Compress`;
-    const encoded = Buffer.from(psScript, 'utf16le').toString('base64');
-    const output = await new Promise<string>((resolve, reject) => {
-      execF('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded],
-        { timeout: 20000, windowsHide: true, encoding: 'utf8', maxBuffer: 5 * 1024 * 1024 },
-        (err: any, stdout: string) => err ? reject(err) : resolve((stdout || '').trim()));
-    });
+    const { runPowerShellSafe } = await import('./services/execOptions');
+    const output = await runPowerShellSafe(psScript, { timeout: 20000, maxBuffer: 5 * 1024 * 1024 });
     if (!output) return { success: true, score: 0, passed: 0, total: 0, checks: [] };
     const parsed = JSON.parse(output);
     let checks = parsed.checks;
@@ -3227,12 +3168,8 @@ ipcMain.handle('sentinel-portscan-run', async () => {
     const psScript = `$ErrorActionPreference='SilentlyContinue'
 $listening=Get-NetTCPConnection -State Listen|ForEach-Object{$proc=Get-Process -Id $_.OwningProcess -EA SilentlyContinue;[PSCustomObject]@{port=$_.LocalPort;address=$_.LocalAddress;pid=$_.OwningProcess;process=if($proc){$proc.ProcessName}else{'Unknown'};processPath=if($proc){$proc.Path}else{''}}}|Sort-Object port -Unique
 $listening|ConvertTo-Json -Depth 2 -Compress`;
-    const encoded = Buffer.from(psScript, 'utf16le').toString('base64');
-    const output = await new Promise<string>((resolve, reject) => {
-      execF('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded],
-        { timeout: 10000, windowsHide: true, encoding: 'utf8', maxBuffer: 5 * 1024 * 1024 },
-        (err: any, stdout: string) => err ? reject(err) : resolve((stdout || '').trim()));
-    });
+    const { runPowerShellSafe } = await import('./services/execOptions');
+    const output = await runPowerShellSafe(psScript, { timeout: 10000, maxBuffer: 5 * 1024 * 1024 });
     if (!output) return { success: true, ports: [] };
     let ports = JSON.parse(output);
     if (!Array.isArray(ports)) ports = ports ? [ports] : [];
@@ -4032,12 +3969,8 @@ ipcMain.handle('forge-get-top-cpu-processes', async () => {
   try {
     const { execFile: execF } = require('child_process');
     const psCmd = 'Get-Process|Sort-Object CPU -Descending|Select-Object -First 20 Id,ProcessName,@{N="CPU";E={[math]::Round($_.CPU,1)}},@{N="MemMB";E={[math]::Round($_.WorkingSet64/1MB,1)}}|ConvertTo-Json -Compress';
-    const enc = Buffer.from(psCmd, 'utf16le').toString('base64');
-    const raw = await new Promise<string>((resolve, reject) => {
-      execF('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', enc],
-        { timeout: 10000, windowsHide: true, encoding: 'utf8' },
-        (err: any, stdout: string) => err ? reject(err) : resolve(stdout));
-    });
+    const { runPowerShellSafe } = await import('./services/execOptions');
+    const raw = await runPowerShellSafe(psCmd, { timeout: 10000 });
     let procs = JSON.parse((raw || '[]').trim());
     if (!Array.isArray(procs)) procs = procs ? [procs] : [];
     return { success: true, processes: procs };
@@ -4050,12 +3983,8 @@ ipcMain.handle('forge-get-cpu-core-count', async () => {
   try {
     const { execFile: execF } = require('child_process');
     const psCmd = 'Get-CimInstance Win32_Processor|Select-Object -First 1 NumberOfCores,NumberOfLogicalProcessors|ConvertTo-Json -Compress';
-    const enc = Buffer.from(psCmd, 'utf16le').toString('base64');
-    const out = (await new Promise<string>((resolve, reject) => {
-      execF('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', enc],
-        { timeout: 5000, windowsHide: true, encoding: 'utf8' },
-        (err: any, stdout: string) => err ? reject(err) : resolve(stdout));
-    })).trim();
+    const { runPowerShellSafe } = await import('./services/execOptions');
+    const out = (await runPowerShellSafe(psCmd, { timeout: 5000 })).trim();
     const parsed = JSON.parse(out);
     const physicalCores = typeof parsed.NumberOfCores === 'number' ? parsed.NumberOfCores : Math.max(1, Math.ceil(os.cpus().length / 2));
     const logicalThreads = typeof parsed.NumberOfLogicalProcessors === 'number' ? parsed.NumberOfLogicalProcessors : os.cpus().length;
@@ -4165,12 +4094,8 @@ ipcMain.handle('forge-backup-services-state', async () => {
     const backupPath = path.join(app.getPath('userData'), 'services-backup.json');
     const { execFile: execF } = require('child_process');
     const psCmd = 'Get-Service|Select-Object Name,StartType|ConvertTo-Json -Compress';
-    const enc = Buffer.from(psCmd, 'utf16le').toString('base64');
-    const raw = await new Promise<string>((resolve, reject) => {
-      execF('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', enc],
-        { timeout: 15000, windowsHide: true, encoding: 'utf8' },
-        (err: any, stdout: string) => err ? reject(err) : resolve(stdout));
-    });
+    const { runPowerShellSafe } = await import('./services/execOptions');
+    const raw = await runPowerShellSafe(psCmd, { timeout: 15000 });
     if (raw?.trim()) {
       fs.writeFileSync(backupPath, raw.trim(), 'utf8');
       return { success: true, backupFile: backupPath, message: 'Services state backed up' };
@@ -4208,14 +4133,9 @@ ipcMain.handle('forge-restore-services-state', async () => {
 
 ipcMain.handle('forge-get-drive-info', async () => {
   try {
-    const { execFile: execF } = require('child_process');
     const psCmd = 'Get-PSDrive -PSProvider FileSystem|Select-Object Name,@{N="UsedGB";E={[math]::Round($_.Used/1GB,2)}},@{N="FreeGB";E={[math]::Round($_.Free/1GB,2)}}|ConvertTo-Json -Compress';
-    const enc = Buffer.from(psCmd, 'utf16le').toString('base64');
-    const raw = await new Promise<string>((resolve, reject) => {
-      execF('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', enc],
-        { timeout: 10000, windowsHide: true, encoding: 'utf8' },
-        (err: any, stdout: string) => err ? reject(err) : resolve(stdout));
-    });
+    const { runPowerShellSafe } = await import('./services/execOptions');
+    const raw = await runPowerShellSafe(psCmd, { timeout: 10000 });
     let drives = JSON.parse((raw || '[]').trim());
     if (!Array.isArray(drives)) drives = drives ? [drives] : [];
     return { success: true, drives };
@@ -4295,14 +4215,9 @@ ipcMain.handle('set-power-plan', async (_event, plan: string) => {
 
 ipcMain.handle('get-startup-apps', async () => {
   try {
-    const { execFile: execF } = require('child_process');
     const psCmd = 'Get-CimInstance Win32_StartupCommand|Select-Object Name,Command,Location|ConvertTo-Json -Compress';
-    const enc = Buffer.from(psCmd, 'utf16le').toString('base64');
-    const raw = await new Promise<string>((resolve, reject) => {
-      execF('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', enc],
-        { timeout: 10000, windowsHide: true, encoding: 'utf8' },
-        (err: any, stdout: string) => err ? reject(err) : resolve(stdout));
-    });
+    const { runPowerShellSafe } = await import('./services/execOptions');
+    const raw = await runPowerShellSafe(psCmd, { timeout: 10000 });
     let apps = JSON.parse((raw || '[]').trim());
     if (!Array.isArray(apps)) apps = apps ? [apps] : [];
     return apps;
@@ -4315,14 +4230,9 @@ ipcMain.handle('toggle-startup-app', async (_event, program: any, enable: boolea
 
 ipcMain.handle('get-services', async () => {
   try {
-    const { execFile: execF } = require('child_process');
     const psCmd = 'Get-Service|Select-Object Name,DisplayName,Status,StartType|ConvertTo-Json -Compress';
-    const enc = Buffer.from(psCmd, 'utf16le').toString('base64');
-    const raw = await new Promise<string>((resolve, reject) => {
-      execF('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', enc],
-        { timeout: 15000, windowsHide: true, encoding: 'utf8' },
-        (err: any, stdout: string) => err ? reject(err) : resolve(stdout));
-    });
+    const { runPowerShellSafe } = await import('./services/execOptions');
+    const raw = await runPowerShellSafe(psCmd, { timeout: 15000 });
     let svcs = JSON.parse((raw || '[]').trim());
     if (!Array.isArray(svcs)) svcs = svcs ? [svcs] : [];
     return svcs;
@@ -4343,14 +4253,9 @@ ipcMain.handle('toggle-service', async (_event, serviceName: string, enable: boo
 
 ipcMain.handle('get-disk-info', async () => {
   try {
-    const { execFile: execF } = require('child_process');
     const psCmd = 'Get-PSDrive -PSProvider FileSystem|Select-Object Name,@{N="UsedGB";E={[math]::Round($_.Used/1GB,2)}},@{N="FreeGB";E={[math]::Round($_.Free/1GB,2)}}|ConvertTo-Json -Compress';
-    const enc = Buffer.from(psCmd, 'utf16le').toString('base64');
-    const raw = await new Promise<string>((resolve, reject) => {
-      execF('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', enc],
-        { timeout: 10000, windowsHide: true, encoding: 'utf8' },
-        (err: any, stdout: string) => err ? reject(err) : resolve(stdout));
-    });
+    const { runPowerShellSafe } = await import('./services/execOptions');
+    const raw = await runPowerShellSafe(psCmd, { timeout: 10000 });
     let drives = JSON.parse((raw || '[]').trim());
     if (!Array.isArray(drives)) drives = drives ? [drives] : [];
     return { success: true, drives };
@@ -4359,15 +4264,10 @@ ipcMain.handle('get-disk-info', async () => {
 
 ipcMain.handle('analyze-disk', async (_event, drive: string) => {
   try {
-    const { execFile: execF } = require('child_process');
     const safeDrive = String(drive).replace(/[^a-zA-Z]/g, '');
     const psCmd = `$d=Get-PSDrive ${safeDrive};[PSCustomObject]@{UsedGB=[math]::Round($d.Used/1GB,2);FreeGB=[math]::Round($d.Free/1GB,2)}|ConvertTo-Json -Compress`;
-    const enc = Buffer.from(psCmd, 'utf16le').toString('base64');
-    const raw = await new Promise<string>((resolve, reject) => {
-      execF('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', enc],
-        { timeout: 10000, windowsHide: true, encoding: 'utf8' },
-        (err: any, stdout: string) => err ? reject(err) : resolve(stdout));
-    });
+    const { runPowerShellSafe } = await import('./services/execOptions');
+    const raw = await runPowerShellSafe(psCmd, { timeout: 10000 });
     return { success: true, data: JSON.parse((raw || '{}').trim()) };
   } catch (error: any) { return { success: false, error: error.message }; }
 });
@@ -4622,14 +4522,9 @@ ipcMain.handle('get-network-diagnostics', async () => {
 
 ipcMain.handle('get-temperatures', async () => {
   try {
-    const { execFile: execF } = require('child_process');
     const psCmd = '$t=Get-CimInstance MSAcpi_ThermalZoneTemperature -Namespace root/wmi -EA SilentlyContinue|Select-Object -First 1;if($t){[math]::Round(($t.CurrentTemperature-2732)/10,1)}else{-1}';
-    const enc = Buffer.from(psCmd, 'utf16le').toString('base64');
-    const raw = await new Promise<string>((resolve, reject) => {
-      execF('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', enc],
-        { timeout: 5000, windowsHide: true, encoding: 'utf8' },
-        (err: any, stdout: string) => err ? reject(err) : resolve(stdout));
-    });
+    const { runPowerShellSafe } = await import('./services/execOptions');
+    const raw = await runPowerShellSafe(psCmd, { timeout: 5000 });
     const temp = parseFloat((raw || '-1').trim());
     return { success: true, data: { cpuTemp: isNaN(temp) ? -1 : temp, gpuTemp: -1 } };
   } catch { return { success: true, data: { cpuTemp: -1, gpuTemp: -1 } }; }
@@ -4637,14 +4532,9 @@ ipcMain.handle('get-temperatures', async () => {
 
 ipcMain.handle('get-security-status', async () => {
   try {
-    const { execFile: execF } = require('child_process');
     const psCmd = '$fw=(Get-NetFirewallProfile|Where-Object{$_.Enabled}).Count;$def=(Get-MpComputerStatus -EA SilentlyContinue);[PSCustomObject]@{firewallProfiles=$fw;defenderEnabled=$def.AntivirusEnabled;realTimeProtection=$def.RealTimeProtectionEnabled}|ConvertTo-Json -Compress';
-    const enc = Buffer.from(psCmd, 'utf16le').toString('base64');
-    const raw = await new Promise<string>((resolve, reject) => {
-      execF('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', enc],
-        { timeout: 10000, windowsHide: true, encoding: 'utf8' },
-        (err: any, stdout: string) => err ? reject(err) : resolve(stdout));
-    });
+    const { runPowerShellSafe } = await import('./services/execOptions');
+    const raw = await runPowerShellSafe(psCmd, { timeout: 10000 });
     return { success: true, data: JSON.parse((raw || '{}').trim()) };
   } catch (error: any) { return { success: false, error: error.message }; }
 });
@@ -4687,12 +4577,8 @@ ipcMain.handle('get-processes-enhanced', async () => {
     const { getProcessKillRisk } = await import('../shared/constants');
     const { execFile: execF } = require('child_process');
     const psCmd = `$ErrorActionPreference='SilentlyContinue';Get-Process|Where-Object{$_.Id -gt 0}|Sort-Object WorkingSet64 -Descending|Select-Object -First 80 Id,ProcessName,@{N="CPUms";E={try{[math]::Round($_.TotalProcessorTime.TotalMilliseconds)}catch{0}}},@{N="MemMB";E={[math]::Round($_.WorkingSet64/1MB,1)}},Path,Description,Company|ConvertTo-Json -Compress`;
-    const enc = Buffer.from(psCmd, 'utf16le').toString('base64');
-    const raw = await new Promise<string>((resolve, reject) => {
-      execF('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', enc],
-        { timeout: 12000, windowsHide: true, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 },
-        (err: any, stdout: string) => err ? reject(err) : resolve(stdout));
-    });
+    const { runPowerShellSafe } = await import('./services/execOptions');
+    const raw = await runPowerShellSafe(psCmd, { timeout: 12000, maxBuffer: 10 * 1024 * 1024 });
     let procs = JSON.parse((raw || '[]').trim());
     if (!Array.isArray(procs)) procs = procs ? [procs] : [];
     const now = Date.now();
@@ -4735,12 +4621,8 @@ ipcMain.handle('get-startup-programs', async () => {
   try {
     const { execFile: execF } = require('child_process');
     const psCmd = 'Get-CimInstance Win32_StartupCommand|Select-Object Name,Command,Location,User|ConvertTo-Json -Compress';
-    const enc = Buffer.from(psCmd, 'utf16le').toString('base64');
-    const result = { stdout: await new Promise<string>((resolve, reject) => {
-      execF('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', enc],
-        { timeout: 10000, windowsHide: true, encoding: 'utf8' },
-        (err: any, stdout: string) => err ? reject(err) : resolve(stdout));
-    }) };
+    const { runPowerShellSafe } = await import('./services/execOptions');
+    const result = { stdout: await runPowerShellSafe(psCmd, { timeout: 10000 }) };
     let progs = JSON.parse((result.stdout || '[]').trim());
     if (!Array.isArray(progs)) progs = progs ? [progs] : [];
     return { success: true, programs: progs };

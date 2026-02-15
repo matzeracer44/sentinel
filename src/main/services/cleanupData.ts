@@ -6,14 +6,13 @@ const execFileAsync = promisify(execFile);
 
 /**
  * Helper function to execute PowerShell commands with proper error handling.
- * Uses execFile with EncodedCommand to avoid shell quoting issues and main-thread blocking.
+ * Uses execFile with -Command to avoid shell quoting issues and main-thread blocking.
  */
 async function execPowerShell(command: string): Promise<string> {
   try {
-    const encoded = Buffer.from(command, 'utf16le').toString('base64');
     const { stdout } = await execFileAsync(
-      'powershell',
-      ['-NoLogo', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-NoProfile', '-EncodedCommand', encoded],
+      'powershell.exe',
+      ['-NoLogo', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-NoProfile', '-Command', command],
       getExecOptions(),
     ) as { stdout: string };
     return (stdout || '').trim();

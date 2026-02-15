@@ -19,10 +19,9 @@ function validateSnapshotId(id: string): string {
 
 async function execPowerShell(command: string): Promise<string> {
   try {
-    const encoded = Buffer.from(command, 'utf16le').toString('base64');
     const { stdout } = await execFileAsync(
-      'powershell',
-      ['-NoLogo', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-NoProfile', '-EncodedCommand', encoded],
+      'powershell.exe',
+      ['-NoLogo', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-NoProfile', '-Command', command],
       getExecOptions(),
     ) as { stdout: string };
     return (stdout || '').trim();

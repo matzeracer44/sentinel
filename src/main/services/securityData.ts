@@ -9,11 +9,9 @@ const execAsync = promisify(exec);
  */
 async function execPowerShell(command: string): Promise<string> {
   try {
-    // Encode command as UTF-16LE base64 to avoid cmd.exe/quotes parsing issues
-    const encoded = Buffer.from(command, 'utf16le').toString('base64');
-    // Use execFile with argument array to avoid shell quoting and parsing issues
-    const args = ['-NoLogo', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-NoProfile', '-EncodedCommand', encoded];
-    const { stdout } = await execFileP('powershell', args, getExecOptions()) as { stdout: string };
+    // Use execFile with -Command (not -EncodedCommand which is blocked by some AV/AMSI)
+    const args = ['-NoLogo', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-NoProfile', '-Command', command];
+    const { stdout } = await execFileP('powershell.exe', args, getExecOptions()) as { stdout: string };
 
     if (!stdout) return '';
 

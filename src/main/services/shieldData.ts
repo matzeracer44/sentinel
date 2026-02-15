@@ -15,8 +15,7 @@ async function runCmd(cmd: string, opts: { timeout?: number; maxBuffer?: number;
 }
 
 async function runPS(script: string, timeout = 15000): Promise<string> {
-  const encoded = Buffer.from(script, 'utf16le').toString('base64');
-  const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded], {
+  const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script], {
     timeout, windowsHide: true, encoding: 'utf8', maxBuffer: 50 * 1024 * 1024,
   });
   return (stdout || '').trim();

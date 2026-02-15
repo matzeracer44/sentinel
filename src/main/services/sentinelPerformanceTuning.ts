@@ -18,9 +18,8 @@ export interface PerfCheck {
 }
 
 async function ps(script: string, timeout = 12000): Promise<string> {
-  const encoded = Buffer.from(script, 'utf16le').toString('base64');
   const { stdout } = await execFileAsync('powershell.exe',
-    ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded],
+    ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script],
     { timeout, windowsHide: true, maxBuffer: 4 * 1024 * 1024 }
   );
   return (stdout || '').trim();

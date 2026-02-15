@@ -177,9 +177,8 @@ export async function getFullHardwareReport(): Promise<HardwareReport> {
   };
 
   try {
-    const encoded = Buffer.from(PS_SCRIPT, 'utf16le').toString('base64');
     const { stdout, stderr } = await execFileAsync('powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded],
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', PS_SCRIPT],
       { timeout: PS_TIMEOUT, windowsHide: true, encoding: 'utf8', maxBuffer: PS_MAX_BUFFER }
     );
     if (stderr) console.warn('[HardwareDiscovery] PS stderr:', stderr.substring(0, 500));
