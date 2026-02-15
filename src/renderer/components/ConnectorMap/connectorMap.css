@@ -1,0 +1,642 @@
+/* =========================================================================
+   Sentinel Unified — Connector Map Styles
+   Dark Cyber theme with neon accents, glow effects, and animations.
+   ========================================================================= */
+
+/* ---------------------------------------------------------------------------
+   Container
+   --------------------------------------------------------------------------- */
+
+.connector-map {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 600px;
+  background: #0a0e1a;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.connector-map svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* ---------------------------------------------------------------------------
+   Ring Circles
+   --------------------------------------------------------------------------- */
+
+.ring-circle {
+  fill: none;
+  stroke: #1e293b;
+  stroke-width: 1;
+  stroke-dasharray: 4 6;
+  opacity: 0.5;
+}
+
+.ring-label {
+  fill: #64748b;
+  font-size: 10px;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  pointer-events: none;
+}
+
+/* ---------------------------------------------------------------------------
+   Sector Arcs (background tint per cluster)
+   --------------------------------------------------------------------------- */
+
+.sector-arc {
+  opacity: 0.04;
+  pointer-events: none;
+}
+
+/* ---------------------------------------------------------------------------
+   Edges
+   --------------------------------------------------------------------------- */
+
+.connector-edge {
+  fill: none;
+  stroke-width: 1;
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+.connector-edge--heartbeat {
+  stroke: rgba(255, 255, 255, 0.12);
+  stroke-dasharray: 2 8;
+}
+
+.connector-edge--data-flow {
+  stroke-width: 1.2;
+  opacity: 0.3;
+}
+
+.connector-edge--trigger {
+  stroke-width: 1.5;
+  stroke-dasharray: 6 3;
+  opacity: 0.4;
+}
+
+.connector-edge--dependency {
+  stroke-width: 0.8;
+  stroke-dasharray: 3 4;
+  opacity: 0.2;
+}
+
+/* ---------------------------------------------------------------------------
+   Particle Flow on Edges
+   --------------------------------------------------------------------------- */
+
+.edge-particle {
+  pointer-events: none;
+}
+
+@keyframes particleMove {
+  0% { offset-distance: 0%; opacity: 0; }
+  10% { opacity: 1; }
+  90% { opacity: 1; }
+  100% { offset-distance: 100%; opacity: 0; }
+}
+
+/* ---------------------------------------------------------------------------
+   Nodes
+   --------------------------------------------------------------------------- */
+
+.connector-node {
+  cursor: pointer;
+  transition: transform 120ms ease-out;
+}
+
+.connector-node:hover {
+  transform: scale(1.08);
+}
+
+.node-bg {
+  fill: #111827;
+  stroke-width: 1.5;
+  transition: fill 150ms ease, stroke 150ms ease;
+}
+
+.connector-node:hover .node-bg {
+  fill: #1a2035;
+}
+
+.node-label {
+  fill: #e2e8f0;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  font-weight: 500;
+  text-anchor: middle;
+  pointer-events: none;
+}
+
+.node-cluster-tag {
+  fill: #64748b;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  font-weight: 600;
+  font-size: 6px;
+  text-anchor: middle;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  pointer-events: none;
+}
+
+.node-source-badge {
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  font-weight: 700;
+  font-size: 6px;
+  text-anchor: middle;
+  pointer-events: none;
+}
+
+/* ---------------------------------------------------------------------------
+   Status LED (Pulse Animation)
+   --------------------------------------------------------------------------- */
+
+.status-led {
+  pointer-events: none;
+}
+
+.status-led--online {
+  fill: #00ff88;
+}
+
+.status-led--degraded {
+  fill: #ffaa00;
+}
+
+.status-led--error {
+  fill: #ff3366;
+}
+
+.status-led--offline {
+  fill: #4b5563;
+}
+
+@keyframes statusPulse {
+  0%, 100% { r: 3; opacity: 1; }
+  50% { r: 4.5; opacity: 0.7; }
+}
+
+@keyframes statusBlink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.2; }
+}
+
+.status-led--online,
+.status-led--degraded {
+  animation: statusPulse 2s ease-in-out infinite;
+}
+
+.status-led--error {
+  animation: statusBlink 0.5s ease-in-out infinite;
+}
+
+/* Glow ring behind LED */
+.status-glow {
+  pointer-events: none;
+  opacity: 0.4;
+}
+
+.status-glow--online { fill: #00ff88; }
+.status-glow--degraded { fill: #ffaa00; }
+.status-glow--error { fill: #ff3366; }
+.status-glow--offline { fill: transparent; }
+
+@keyframes glowPulse {
+  0%, 100% { r: 5; opacity: 0.3; }
+  50% { r: 8; opacity: 0.1; }
+}
+
+.status-glow--online,
+.status-glow--degraded {
+  animation: glowPulse 2s ease-in-out infinite;
+}
+
+/* ---------------------------------------------------------------------------
+   Core Node (Ring 0 — center)
+   --------------------------------------------------------------------------- */
+
+.core-node .node-bg {
+  fill: #0f172a;
+  stroke: #ffffff;
+  stroke-width: 2;
+}
+
+@keyframes coreBreath {
+  0%, 100% { stroke-opacity: 0.6; }
+  50% { stroke-opacity: 1; }
+}
+
+.core-node .node-bg {
+  animation: coreBreath 3s ease-in-out infinite;
+}
+
+.core-label {
+  fill: #ffffff;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  font-weight: 700;
+  font-size: 14px;
+  text-anchor: middle;
+  letter-spacing: 3px;
+  pointer-events: none;
+}
+
+/* ---------------------------------------------------------------------------
+   Node Hover Glow (per cluster)
+   --------------------------------------------------------------------------- */
+
+.node-hover-glow {
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+
+.connector-node:hover .node-hover-glow {
+  opacity: 0.25;
+}
+
+/* ---------------------------------------------------------------------------
+   Node Selection Ring
+   --------------------------------------------------------------------------- */
+
+.node-selection-ring {
+  fill: none;
+  stroke-width: 2;
+  stroke-dasharray: 4 3;
+  pointer-events: none;
+}
+
+@keyframes selectionSpin {
+  from { stroke-dashoffset: 0; }
+  to { stroke-dashoffset: -14; }
+}
+
+.node-selection-ring {
+  animation: selectionSpin 1.5s linear infinite;
+}
+
+/* ---------------------------------------------------------------------------
+   Modal Overlay
+   --------------------------------------------------------------------------- */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal-backdrop--entering {
+  animation: backdropFadeIn 200ms ease-out forwards;
+}
+
+.modal-backdrop--exiting {
+  animation: backdropFadeOut 150ms ease-in forwards;
+}
+
+@keyframes backdropFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes backdropFadeOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+.modal-panel {
+  background: #1a2035;
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  max-width: 640px;
+  width: 90%;
+  max-height: 80vh;
+  overflow-y: auto;
+  padding: 24px;
+  position: relative;
+  z-index: 1001;
+}
+
+.modal-panel--entering {
+  animation: modalSlideIn 200ms ease-out forwards;
+}
+
+.modal-panel--exiting {
+  animation: modalSlideOut 150ms ease-in forwards;
+}
+
+@keyframes modalSlideIn {
+  from { opacity: 0; transform: scale(0.95) translateY(8px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes modalSlideOut {
+  from { opacity: 1; transform: scale(1) translateY(0); }
+  to { opacity: 0; transform: scale(0.95) translateY(8px); }
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #1e293b;
+}
+
+.modal-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #e2e8f0;
+  font-size: 16px;
+  font-weight: 600;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+}
+
+.modal-close {
+  background: none;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  color: #94a3b8;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background 150ms, color 150ms;
+}
+
+.modal-close:hover {
+  background: #334155;
+  color: #e2e8f0;
+}
+
+.modal-section {
+  margin-bottom: 16px;
+}
+
+.modal-section-title {
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 8px;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+}
+
+.modal-status-row {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.modal-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.modal-stat-label {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.modal-stat-value {
+  color: #e2e8f0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.modal-log-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  max-height: 200px;
+  overflow-y: auto;
+  font-family: 'Cascadia Code', 'Fira Code', monospace;
+  font-size: 11px;
+}
+
+.modal-log-entry {
+  display: flex;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(30, 41, 59, 0.5);
+  color: #94a3b8;
+}
+
+.modal-log-time {
+  color: #64748b;
+  white-space: nowrap;
+  min-width: 60px;
+}
+
+.modal-log-msg--info { color: #94a3b8; }
+.modal-log-msg--warn { color: #ffaa00; }
+.modal-log-msg--error { color: #ff3366; }
+
+.modal-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.modal-btn {
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 150ms, border-color 150ms;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+}
+
+.modal-btn--primary {
+  background: rgba(0, 240, 255, 0.15);
+  border: 1px solid rgba(0, 240, 255, 0.3);
+  color: #00f0ff;
+}
+
+.modal-btn--primary:hover {
+  background: rgba(0, 240, 255, 0.25);
+  border-color: rgba(0, 240, 255, 0.5);
+}
+
+.modal-btn--danger {
+  background: rgba(255, 51, 102, 0.12);
+  border: 1px solid rgba(255, 51, 102, 0.3);
+  color: #ff3366;
+}
+
+.modal-btn--danger:hover {
+  background: rgba(255, 51, 102, 0.22);
+  border-color: rgba(255, 51, 102, 0.5);
+}
+
+.modal-btn--ghost {
+  background: transparent;
+  border: 1px solid #334155;
+  color: #94a3b8;
+}
+
+.modal-btn--ghost:hover {
+  background: #1e293b;
+  color: #e2e8f0;
+}
+
+/* ---------------------------------------------------------------------------
+   Map Controls
+   --------------------------------------------------------------------------- */
+
+.map-controls {
+  position: absolute;
+  bottom: 16px;
+  left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  z-index: 100;
+}
+
+.map-control-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  background: rgba(17, 24, 39, 0.9);
+  border: 1px solid #1e293b;
+  color: #94a3b8;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background 150ms, color 150ms, border-color 150ms;
+}
+
+.map-control-btn:hover {
+  background: #1a2035;
+  color: #e2e8f0;
+  border-color: #334155;
+}
+
+.map-control-btn--active {
+  border-color: #00f0ff;
+  color: #00f0ff;
+}
+
+/* Filter bar */
+.map-filter-bar {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: rgba(17, 24, 39, 0.9);
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  z-index: 100;
+}
+
+.filter-chip {
+  padding: 4px 10px;
+  border-radius: 5px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background 150ms, border-color 150ms, opacity 150ms;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+}
+
+.filter-chip--active {
+  opacity: 1;
+}
+
+.filter-chip--inactive {
+  opacity: 0.35;
+}
+
+.filter-chip:hover {
+  opacity: 0.85;
+}
+
+/* ---------------------------------------------------------------------------
+   Ambient Rotation (outer ring)
+   --------------------------------------------------------------------------- */
+
+@keyframes ambientRotate {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.ring-ambient-rotate {
+  transform-origin: center center;
+  animation: ambientRotate 3600s linear infinite;
+}
+
+/* ---------------------------------------------------------------------------
+   Shockwave (alert animation from node to core)
+   --------------------------------------------------------------------------- */
+
+@keyframes shockwave {
+  0% { r: 0; opacity: 0.6; stroke-width: 3; }
+  100% { r: 200; opacity: 0; stroke-width: 0.5; }
+}
+
+.shockwave-ring {
+  fill: none;
+  pointer-events: none;
+  animation: shockwave 800ms ease-out forwards;
+}
+
+/* ---------------------------------------------------------------------------
+   Scrollbar (modal)
+   --------------------------------------------------------------------------- */
+
+.modal-panel::-webkit-scrollbar {
+  width: 6px;
+}
+
+.modal-panel::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.modal-panel::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 3px;
+}
+
+.modal-panel::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
+
+.modal-log-list::-webkit-scrollbar {
+  width: 4px;
+}
+
+.modal-log-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.modal-log-list::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 2px;
+}

@@ -1,0 +1,26 @@
+# API keys — NEVER commit this file
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Logs & data
+logs/
+data/
+*.log
+
+# Virtual environment
+venv/
+
+# Test artifacts
+_test_*.py
+_smoke.py
+
+# IDE
+.vscode/
+.idea/
+*.swp

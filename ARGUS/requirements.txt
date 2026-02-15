@@ -1,0 +1,14 @@
+flask==2.3.3
+requests==2.31.0
+cryptography==41.0.7
+python-whois==0.8.0
+dnspython
+validators==0.22.0
+colorama==0.4.6
+click==8.1.7
+pyyaml==6.0.1
+urllib3==2.0.7
+psutil==5.9.6
+ipwhois==1.2.0
+python-dotenv==1.0.0
+beautifulsoup4==4.12.2

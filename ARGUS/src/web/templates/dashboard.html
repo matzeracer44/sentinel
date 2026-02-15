@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - ARGUS{% endblock %}
+{% block content %}
+    <div class="card">
+        <h2>Security Dashboard</h2>
+        <div class="stats">
+            <div class="stat-card">
+                <div class="stat-number">{{ summary.total_events }}</div>
+                <p>Total Events</p>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number">{{ summary.severity_counts.get('HIGH', 0) + summary.severity_counts.get('CRITICAL', 0) }}</div>
+                <p>High Priority</p>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number">{{ summary.session_id[:8] }}</div>
+                <p>Session ID</p>
+            </div>
+        </div>
+    </div>
+    
+    <div class="card">
+        <h3>Recent Suspicious Activities</h3>
+        <div class="activity-list">
+            {% for activity in suspicious[:10] %}
+            <div class="activity-item">
+                <strong>{{ activity.event_type }}</strong> - {{ activity.timestamp }}<br>
+                {{ activity.source }} → {{ activity.target }}
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+{% endblock %}

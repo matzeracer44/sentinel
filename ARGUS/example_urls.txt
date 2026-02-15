@@ -1,0 +1,10 @@
+https://www.google.com
+https://github.com
+https://bit.ly/suspicious-link
+https://example.tk
+http://192.168.1.1/admin
+https://paypal-login.secure-update.com
+https://tinyurl.com/shortened
+https://legitimate-bank.com/login
+https://suspicious-domain.ml
+https://verify-account-now.com

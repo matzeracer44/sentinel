@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Encrypt Data - ARGUS{% endblock %}
+{% block content %}
+    <div class="card">
+        <h2>Data Encryption</h2>
+        <p>Encrypt sensitive data using AES-256 encryption.</p>
+        <textarea id="encryptInput" class="input" rows="5" placeholder="Enter data to encrypt..."></textarea>
+        <button class="btn" onclick="encryptData()">Encrypt</button>
+        <div id="encryptResult"></div>
+    </div>
+    
+    <script>
+        function encryptData() {
+            const data = document.getElementById('encryptInput').value;
+            if (!data) {
+                alert('Please enter data to encrypt');
+                return;
+            }
+            
+            fetch('/api/encrypt', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({data: data})
+            })
+            .then(response => response.json())
+            .then(result => {
+                document.getElementById('encryptResult').innerHTML = 
+                    '<h3>Encrypted Result</h3><textarea class="input" rows="3" readonly>' + result.encrypted + '</textarea>';
+            })
+            .catch(error => alert('Encryption failed: ' + error));
+        }
+    </script>
+{% endblock %}

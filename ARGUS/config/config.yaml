@@ -1,0 +1,102 @@
+# ARGUS Security Tool Configuration — SAFETY-FIRST + SAFE FETCH
+app:
+  name: "ARGUS"
+  version: "1.0.0"
+  debug: false          # BLEIBT false — kein Debug in Prod
+  host: "127.0.0.1"
+  port: 8080
+
+security:
+  encryption_key_length: 32
+  log_retention_days: 30
+  max_concurrent_scans: 10
+  enforce_https: true
+  certificate_validation: true
+  header_injection_protection: true
+  rate_limiting:
+    enabled: true
+    max_requests_per_minute: 60
+
+detection:
+  enabled: true
+  suspicious_tlds: ['.tk', '.ml', '.ga', '.cf', '.gq', '.top', '.buzz', '.xyz', '.club', '.work', '.icu']
+  max_url_length: 2048
+  suspicious_patterns:
+    - 'bit.ly'
+    - 'tinyurl.com'
+    - 't.co'
+    - 'goo.gl'
+    - 'is.gd'
+    - 'shorturl.at'
+    - 'rb.gy'
+  phishing_keywords:
+    - 'login'
+    - 'signin'
+    - 'verify'
+    - 'account'
+    - 'secure'
+    - 'update'
+    - 'confirm'
+    - 'suspend'
+    - 'unlock'
+    - 'expire'
+  homograph_detection: true
+  punycode_check: true
+  redirect_chain_analysis: true
+  max_redirect_depth: 5
+  content_type_validation: true
+
+sandbox:
+  enabled: false                      # PRODUCTION: Sandbox OFF — no mock data
+  block_outbound_on_failure: true     # Wenn Sandbox crasht → kein Fallthrough
+  mock_engine:
+    enabled: false                    # PRODUCTION: Mock engine OFF — real API calls only
+
+threat_intel:
+  virustotal_api_key: "${ARGUS_VIRUSTOTAL_KEY}"
+  abuseipdb_api_key: "${ARGUS_ABUSEIPDB_KEY}"
+  alienvault_otx_api_key: "${ARGUS_OTX_KEY}"
+  ipinfo_token: "${ARGUS_IPINFO_TOKEN}"
+  enabled: true
+  timeout: 12
+  sources:
+    virustotal: true
+    abuseipdb: true
+    alienvault_otx: true
+    ipinfo: true
+  fallback_on_timeout: true
+  cache:
+    enabled: true
+    ttl_seconds: 3600
+
+logging:
+  level: "INFO"
+  file: "logs/argus.log"
+  max_size_mb: 100
+  backup_count: 5
+  structured_json: true
+  redact_secrets: true
+
+url_fetch:
+  enabled: true                      # Fetching ist AN
+  mode: "validate_then_fetch"        # Nicht blocken — validieren DANN fetchen
+  pre_fetch_checks:
+    resolve_dns_first: true
+    block_private_ips: true          # 10.x, 172.16-31.x, 192.168.x
+    block_localhost: true            # 127.0.0.1, ::1, 0.0.0.0
+    block_metadata: true             # 169.254.169.254
+    block_file_scheme: true
+    block_data_scheme: true
+    allowed_schemes: ["http", "https"]
+    dns_rebinding_protection: true
+  post_fetch_checks:
+    validate_content_type: true
+    max_response_size_mb: 10
+    scan_response_body: true         # Scan auf Malware-Patterns
+    block_executable_content: true   # Keine .exe/.bat/.ps1/.sh im Body
+    block_script_injection: true     # Kein eval-barer Code im Response
+  redirect_policy:
+    follow_redirects: true
+    max_hops: 5
+    revalidate_each_hop: true        # Jeder Redirect wird erneut geprüft
+  on_fail: "block_and_log"           # Wenn Check fehlschlägt → Block + Log
