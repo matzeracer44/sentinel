@@ -157,6 +157,71 @@ export function isArgusLocalhost(url: string): boolean {
 }
 
 // ═══════════════════════════════════════════════════════════
+// IP VALIDATION FOR SHELL COMMANDS
+// ═══════════════════════════════════════════════════════════
+
+const STRICT_IPV4 = /^(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)$/;
+const STRICT_IPV6 = /^(?:[0-9a-fA-F]{1,4}:){2,7}[0-9a-fA-F]{1,4}$|^::1$|^::$/;
+const STRICT_CIDR = /^(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\/(?:[0-9]|[12]\d|3[0-2])$/;
+
+/**
+ * Validate an IP address is safe for shell interpolation.
+ * Returns the trimmed IP if valid, empty string if not.
+ * NEVER pass user-supplied IPs to exec without this check.
+ */
+export function validateIPForShell(ip: string): string {
+  const trimmed = (ip || '').trim();
+  if (STRICT_IPV4.test(trimmed)) return trimmed;
+  if (STRICT_IPV6.test(trimmed)) return trimmed;
+  if (STRICT_CIDR.test(trimmed)) return trimmed;
+  return '';
+}
+
+/**
+ * Validate a hostname is safe for shell interpolation.
+ * Only allows alphanumeric, dots, hyphens. Max 253 chars.
+ */
+export function validateHostnameForShell(host: string): string {
+  const trimmed = (host || '').trim();
+  if (trimmed.length > 253) return '';
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9.\-]*[a-zA-Z0-9]$/.test(trimmed)) return '';
+  return trimmed;
+}
+
+// ═══════════════════════════════════════════════════════════
+// SHELL ARGUMENT SANITIZATION (anti-injection)
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * Sanitize a string before interpolating into a shell command.
+ * Strips all cmd.exe / PowerShell metacharacters that could enable injection.
+ * Use this for ANY user-provided value passed to execSync/exec.
+ */
+export function sanitizeShellArg(input: string): string {
+  if (!input || typeof input !== 'string') return '';
+  // Strip: backticks, pipe, ampersand, semicolons, $, %, newlines, parens, angle brackets, single/double quotes
+  return input.replace(/[`|&;$%\r\n(){}<>'"\\]/g, '');
+}
+
+/**
+ * Validate and coerce a value as a safe integer for shell interpolation.
+ * Returns null if invalid.
+ */
+export function sanitizeShellInt(input: unknown, min = 0, max = 65535): number | null {
+  const num = Math.floor(Number(input));
+  if (!Number.isFinite(num) || num < min || num > max) return null;
+  return num;
+}
+
+/**
+ * Whitelist-validate a string against a set of allowed values.
+ * Returns the matched value or the fallback.
+ */
+export function sanitizeShellEnum<T extends string>(input: string, allowed: Set<T>, fallback: T): T {
+  return allowed.has(input as T) ? (input as T) : fallback;
+}
+
+// ═══════════════════════════════════════════════════════════
 // STRING / FORMATTING
 // ═══════════════════════════════════════════════════════════
 

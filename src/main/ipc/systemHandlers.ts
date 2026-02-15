@@ -44,25 +44,29 @@ async function sampleCpuPercent(): Promise<number> {
   } catch { return -1; }
 }
 
-function getDiskPercent(): number {
+async function getDiskPercent(): Promise<number> {
   try {
-    const { execSync } = require('child_process');
-    const out = execSync(
+    const { exec: e } = require('child_process');
+    const { promisify: p } = require('util');
+    const ea = p(e);
+    const { stdout } = await ea(
       'powershell -NoProfile -Command "(Get-PSDrive C).Used / ((Get-PSDrive C).Used + (Get-PSDrive C).Free) * 100"',
       { encoding: 'utf-8', timeout: 5000, windowsHide: true }
-    ).trim();
-    const v = Math.round(parseFloat(out));
+    );
+    const v = Math.round(parseFloat((stdout || '').trim()));
     return isNaN(v) ? -1 : v;
   } catch { return -1; }
 }
 
-function execPsJson(cmd: string): any {
+async function execPsJson(cmd: string): Promise<any> {
   try {
-    const { execSync } = require('child_process');
-    const out = execSync(`powershell -ExecutionPolicy Bypass -NoProfile -Command "${cmd}"`, {
+    const { exec: e } = require('child_process');
+    const { promisify: p } = require('util');
+    const ea = p(e);
+    const { stdout } = await ea(`powershell -ExecutionPolicy Bypass -NoProfile -Command "${cmd}"`, {
       encoding: 'utf-8', timeout: 10000, windowsHide: true,
     });
-    return JSON.parse(out.trim());
+    return JSON.parse((stdout || '').trim());
   } catch { return null; }
 }
 
@@ -77,7 +81,7 @@ export function registerSystemHandlers(): void {
       // Real disk info
       let disks: any[] = [];
       try {
-        const diskData = execPsJson(
+        const diskData = await execPsJson(
           `Get-PSDrive -PSProvider FileSystem | Select-Object Name, @{N='TotalGB';E={[math]::Round(($_.Used+$_.Free)/1GB,2)}}, @{N='UsedGB';E={[math]::Round($_.Used/1GB,2)}}, @{N='FreeGB';E={[math]::Round($_.Free/1GB,2)}} | ConvertTo-Json -Depth 2`
         );
         if (diskData) {
@@ -92,7 +96,7 @@ export function registerSystemHandlers(): void {
       // Real GPU info
       let gpu: any[] = [];
       try {
-        const gpuData = execPsJson(
+        const gpuData = await execPsJson(
           `Get-CimInstance Win32_VideoController | Select-Object Name, @{N='MemoryMB';E={[math]::Round($_.AdapterRAM/1MB)}} | ConvertTo-Json -Depth 2`
         );
         if (gpuData) {
@@ -104,7 +108,7 @@ export function registerSystemHandlers(): void {
       // Real network adapters
       let network: any[] = [];
       try {
-        const netData = execPsJson(
+        const netData = await execPsJson(
           `Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | Select-Object Name, Status, MacAddress, @{N='IP';E={(Get-NetIPAddress -InterfaceIndex $_.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue).IPAddress}} | ConvertTo-Json -Depth 2`
         );
         if (netData) {
@@ -119,10 +123,10 @@ export function registerSystemHandlers(): void {
       return {
         success: true,
         data: {
-          cpu: (() => {
+          cpu: await (async () => {
             let physicalCores = Math.max(1, Math.ceil(cpus.length / 2));
             try {
-              const coreData = execPsJson(
+              const coreData = await execPsJson(
                 `Get-CimInstance Win32_Processor | Select-Object -First 1 NumberOfCores, NumberOfLogicalProcessors | ConvertTo-Json -Compress`
               );
               if (coreData && typeof coreData.NumberOfCores === 'number') {
@@ -132,7 +136,7 @@ export function registerSystemHandlers(): void {
             return { name: cpus[0]?.model || 'Unknown', cores: physicalCores, threads: cpus.length, currentLoad: cpuLoad };
           })(),
           ram,
-          disks: disks.length > 0 ? disks : [{ drive: 'C:', totalGB: -1, usedGB: -1, freeGB: -1, usagePercent: getDiskPercent() }],
+          disks: disks.length > 0 ? disks : [{ drive: 'C:', totalGB: -1, usedGB: -1, freeGB: -1, usagePercent: await getDiskPercent() }],
           system: { manufacturer: os.platform(), model: os.arch(), computerName: os.hostname(), username: os.userInfo().username },
           os: { name: process.platform === 'win32' ? 'Windows' : process.platform, version: os.release(), build: os.release() },
           gpu: gpu.length > 0 ? gpu : [{ name: 'Unknown', memory: -1 }],
@@ -153,11 +157,14 @@ export function registerSystemHandlers(): void {
 
       let securityScore = 50;
       try {
-        const { execSync } = require('child_process');
-        const fwCount = parseInt(execSync(
+        const { exec: e } = require('child_process');
+        const { promisify: p } = require('util');
+        const ea = p(e);
+        const { stdout: fwOut } = await ea(
           'powershell -NoProfile -Command "(Get-NetFirewallProfile | Where-Object { $_.Enabled -eq $true }).Count"',
           { encoding: 'utf-8', timeout: 5000, windowsHide: true }
-        ).trim(), 10);
+        );
+        const fwCount = parseInt((fwOut || '').trim(), 10);
         if (fwCount >= 3) securityScore = 95;
         else if (fwCount >= 2) securityScore = 80;
         else if (fwCount >= 1) securityScore = 65;
@@ -165,11 +172,14 @@ export function registerSystemHandlers(): void {
 
       let privacyScore = 60;
       try {
-        const { execSync } = require('child_process');
-        const level = parseInt(execSync(
+        const { exec: e2 } = require('child_process');
+        const { promisify: p2 } = require('util');
+        const ea2 = p2(e2);
+        const { stdout: privOut } = await ea2(
           'powershell -NoProfile -Command "(Get-ItemProperty -Path HKLM:\\\\SOFTWARE\\\\Policies\\\\Microsoft\\\\Windows\\\\DataCollection -Name AllowTelemetry -ErrorAction SilentlyContinue).AllowTelemetry"',
           { encoding: 'utf-8', timeout: 3000, windowsHide: true }
-        ).trim(), 10);
+        );
+        const level = parseInt((privOut || '').trim(), 10);
         if (level === 0) privacyScore = 95;
         else if (level === 1) privacyScore = 80;
         else if (level === 2) privacyScore = 65;
@@ -188,7 +198,7 @@ export function registerSystemHandlers(): void {
     try {
       const ram = getRAMUsage();
       const cpuPercent = await sampleCpuPercent();
-      const diskPercent = getDiskPercent();
+      const diskPercent = await getDiskPercent();
       return { cpu: cpuPercent, ram: ram.usagePercent, disk: diskPercent, network: 0 };
     } catch {
       return { cpu: -1, ram: -1, disk: -1, network: 0 };
@@ -223,8 +233,10 @@ export function registerSystemHandlers(): void {
     if (!isAdmin) return { success: false, message: 'Admin privileges required' };
     try {
       const freeBefore = os.freemem();
-      const { execSync } = require('child_process');
-      execSync('powershell -ExecutionPolicy Bypass -NoProfile -Command "Clear-RecycleBin -Force -ErrorAction SilentlyContinue; [System.GC]::Collect()"',
+      const { exec: eClr } = require('child_process');
+      const { promisify: pClr } = require('util');
+      const eaClr = pClr(eClr);
+      await eaClr('powershell -ExecutionPolicy Bypass -NoProfile -Command "Clear-RecycleBin -Force -ErrorAction SilentlyContinue; [System.GC]::Collect()"',
         { timeout: 10000, windowsHide: true });
       const freeAfter = os.freemem();
       const freedMB = Math.max(0, Math.round((freeAfter - freeBefore) / (1024 * 1024)));
@@ -237,7 +249,7 @@ export function registerSystemHandlers(): void {
   // ─── Startup Items (real) ───
   ipcMain.handle(IPC.SYSTEM.GET_STARTUP_ITEMS, async () => {
     try {
-      const data = execPsJson(
+      const data = await execPsJson(
         `$items = Get-CimInstance Win32_StartupCommand -ErrorAction SilentlyContinue | Select-Object Name, Command, Location, User | ConvertTo-Json -Depth 2; ` +
         `$boot = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime; ` +
         `$uptime = [math]::Round(((Get-Date) - $boot).TotalSeconds); ` +
@@ -262,7 +274,7 @@ export function registerSystemHandlers(): void {
   // ─── Windows Services (real) ───
   ipcMain.handle(IPC.SYSTEM.GET_WINDOWS_SERVICES, async () => {
     try {
-      const data = execPsJson(`Get-Service | Select-Object Name, DisplayName, Status, StartType | ConvertTo-Json -Depth 2`);
+      const data = await execPsJson(`Get-Service | Select-Object Name, DisplayName, Status, StartType | ConvertTo-Json -Depth 2`);
       let services = Array.isArray(data) ? data : data ? [data] : [];
       return {
         success: true,

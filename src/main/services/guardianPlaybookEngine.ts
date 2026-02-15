@@ -132,6 +132,10 @@ function ensureGuardianScriptDir(): string {
 }
 
 function resolveScriptPath(scriptId: string): string {
+  // SECURITY: Reject path traversal attempts
+  if (/[\\/]|\.\./.test(scriptId)) {
+    throw new Error(`Invalid scriptId (path traversal blocked): ${scriptId}`);
+  }
   if (!scriptLookupCache.has(scriptId)) {
     const normalized = scriptId.endsWith('.ps1') ? scriptId : `${scriptId}.ps1`;
     const userDir = ensureGuardianScriptDir();
@@ -150,6 +154,8 @@ function resolveScriptPath(scriptId: string): string {
   return scriptLookupCache.get(scriptId)!;
 }
 
+const SCRIPT_TIMEOUT_MS = 30_000;
+
 async function executePowerShellScript(scriptPath: string, args: string[] = []): Promise<string> {
   if (!fs.existsSync(scriptPath)) {
     throw new Error(`Script not found at ${scriptPath}`);
@@ -161,14 +167,29 @@ async function executePowerShellScript(scriptPath: string, args: string[] = []):
     });
     let stdout = '';
     let stderr = '';
+    let settled = false;
+
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        try { child.kill(); } catch { /* process may already be dead */ }
+        reject(new Error(`Script timed out after ${SCRIPT_TIMEOUT_MS}ms: ${scriptPath}`));
+      }
+    }, SCRIPT_TIMEOUT_MS);
+
     child.stdout?.on('data', (chunk) => {
       stdout += chunk.toString();
     });
     child.stderr?.on('data', (chunk) => {
       stderr += chunk.toString();
     });
-    child.on('error', (err) => reject(err));
+    child.on('error', (err) => {
+      if (!settled) { settled = true; clearTimeout(timer); reject(err); }
+    });
     child.on('close', (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       if (code === 0) {
         resolve(stdout.trim());
       } else {

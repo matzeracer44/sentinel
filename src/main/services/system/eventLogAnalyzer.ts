@@ -57,9 +57,9 @@ function Evt($log,$ids,$max=10) {
         Message = ($e.Message -replace '\\r\\n',' ' -replace '\\s+',' ').Substring(0,[Math]::Min(300,$e.Message.Length))
       }
     }
-  } catch {}
+  } catch { <# event log may be inaccessible #> }
   $count = 0
-  try { $count = (Get-WinEvent -FilterHashtable @{LogName=$log;Id=$ids;StartTime=$24h} -EA SilentlyContinue | Measure-Object).Count } catch {}
+  try { $count = (Get-WinEvent -FilterHashtable @{LogName=$log;Id=$ids;StartTime=$24h} -EA SilentlyContinue | Measure-Object).Count } catch { <# no matching events #> }
   @{ Count = $count; Recent = $events }
 }
 
@@ -73,7 +73,7 @@ $fwChange = Evt 'Microsoft-Windows-Windows Firewall With Advanced Security/Firew
 $critical = Evt 'System' @(41,1001,6008)
 
 $totalSec = 0
-try { $totalSec = (Get-WinEvent -FilterHashtable @{LogName='Security';StartTime=$24h} -EA SilentlyContinue | Measure-Object).Count } catch {}
+try { $totalSec = (Get-WinEvent -FilterHashtable @{LogName='Security';StartTime=$24h} -EA SilentlyContinue | Measure-Object).Count } catch { <# security log may require admin #> }
 
 [PSCustomObject]@{
   FailedLogins = $failedLogins

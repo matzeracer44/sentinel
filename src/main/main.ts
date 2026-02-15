@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, dialog, Tray, Menu, nativeImage } from 'el
 import * as path from 'path';
 import * as fs from 'fs';
 import { execSync, spawn, exec } from 'child_process';
+import { sanitizeShellArg, sanitizeShellInt, sanitizeShellEnum, validateIPForShell } from '../shared/utils';
 import { promisify } from 'util';
 import * as os from 'os';
 import { 
@@ -347,23 +348,44 @@ function getCPUInfo() {
 }
 
 function getSystemInfo() {
+  let manufacturer = os.platform();
+  let model = os.arch();
+  try {
+    const sysResult = execSync(
+      'powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_ComputerSystem | Select-Object Manufacturer,Model | ConvertTo-Json -Compress"',
+      { timeout: 5000, encoding: 'utf8', windowsHide: true }
+    ).trim();
+    if (sysResult) {
+      const d = JSON.parse(sysResult);
+      if (d.Manufacturer) manufacturer = d.Manufacturer;
+      if (d.Model) model = d.Model;
+    }
+  } catch { /* fallback to os module values */ }
   return {
-    manufacturer: os.platform(),
-    model: os.arch(),
+    manufacturer,
+    model,
     computerName: os.hostname(),
     username: os.userInfo().username,
   };
 }
 
 function getOSInfo() {
-  const platform = process.platform;
-  const release = os.release();
-  
-  return {
-    name: platform === 'win32' ? 'Windows' : platform,
-    version: release,
-    build: release,
-  };
+  let name = 'Windows';
+  let version = os.release();
+  let build = os.release();
+  try {
+    const osResult = execSync(
+      'powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_OperatingSystem | Select-Object Caption,Version,BuildNumber | ConvertTo-Json -Compress"',
+      { timeout: 5000, encoding: 'utf8', windowsHide: true }
+    ).trim();
+    if (osResult) {
+      const d = JSON.parse(osResult);
+      if (d.Caption) name = d.Caption.replace('Microsoft ', '');
+      if (d.Version) version = d.Version;
+      if (d.BuildNumber) build = d.BuildNumber;
+    }
+  } catch { /* fallback to os module values */ }
+  return { name, version, build };
 }
 
 // ============================================
@@ -498,12 +520,12 @@ app.whenReady().then(async () => {
   // Catch uncaught exceptions
   process.on('uncaughtException', (error) => {
     console.error('[MAIN] UNCAUGHT EXCEPTION:', error);
-    try { dialog.showErrorBox('Uncaught Exception', String(error?.stack || error?.message || error)); } catch {}
+    try { dialog.showErrorBox('Uncaught Exception', String(error?.stack || error?.message || error)); } catch { /* dialog may fail if app is shutting down */ }
   });
 
   process.on('unhandledRejection', (reason, _promise) => {
     console.error('[MAIN] UNHANDLED REJECTION:', reason);
-    try { dialog.showErrorBox('Unhandled Rejection', String((reason as any)?.stack || reason)); } catch {}
+    try { dialog.showErrorBox('Unhandled Rejection', String((reason as any)?.stack || reason)); } catch { /* dialog may fail if app is shutting down */ }
   });
 
   console.log('App ready, initializing...');
@@ -678,7 +700,7 @@ function createWindow() {
       responseHeaders: {
         ...details.responseHeaders,
         'Content-Security-Policy': [
-          "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' http://127.0.0.1:8080"
+          "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' http://127.0.0.1:8080; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
         ],
       },
     });
@@ -704,6 +726,35 @@ function createWindow() {
   };
 
   loadRenderer();
+
+  // ═══ SECURITY HARDENING — Prevent renderer hijack ═══
+
+  // Block navigation to any external URL (prevents XSS redirect attacks)
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'file:') {
+      console.warn(`[SECURITY] Blocked navigation to external URL: ${url}`);
+      event.preventDefault();
+    }
+  });
+
+  // Block all new window creation (prevents window.open exploits)
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    console.warn(`[SECURITY] Blocked new window request: ${url}`);
+    return { action: 'deny' };
+  });
+
+  // Block webview attachments (prevents webview tag injection)
+  mainWindow.webContents.on('will-attach-webview', (event) => {
+    console.warn('[SECURITY] Blocked webview attachment attempt');
+    event.preventDefault();
+  });
+
+  // Restrict permission requests (camera, mic, geolocation, etc.)
+  mainWindow.webContents.session.setPermissionRequestHandler((_webContents, permission, callback) => {
+    console.warn(`[SECURITY] Denied permission request: ${permission}`);
+    callback(false);
+  });
 
   mainWindow.webContents.on('did-finish-load', () => {
     console.log('✅ Renderer finished loading');
@@ -737,12 +788,12 @@ function createWindow() {
 function createTray() {
   if (tray && !tray.isDestroyed()) return;
 
-  // Create a 16x16 cyan shield icon programmatically (no external file dependency)
-  const iconDataUrl = nativeImage.createFromDataURL(
-    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAA2ElEQVQ4T6WTwQ3CMAAE7wpaIB2EDkIHoYPQQegAOoAO6CB0QAdxFkWKLPt8lpCQ/CS+nW/t5EJEjpKeJD1IOkfEO7c/SLqW9CLpKSLemX1Z0q2kG0mvkmZ9bHch6UzSu6T7iPhK3W96lvQREZ+/bkj5qKSJpFdJp5J2EbFM/ZR/0BqgJOaAEcOAIdsZYOhw9gXSzgDdB/4dmANGjBgB+tIz6hUvHQn3JFBXoDRA/RdJL9CZpJ2IWPTlFzXI2u/b6JZKbUl1BVJNOeC/75GOZUDU1ht6/ANZRz8Ri0dDIwAAAABJRU5ErkJggg=='
-  );
+  const trayIconPath = path.join(__dirname, '../assets/icon-32.png');
+  const trayIcon = fs.existsSync(trayIconPath)
+    ? nativeImage.createFromPath(trayIconPath)
+    : nativeImage.createFromDataURL('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAA2ElEQVQ4T6WTwQ3CMAAE7wpaIB2EDkIHoYPQQegAOoAO6CB0QAdxFkWKLPt8lpCQ/CS+nW/t5EJEjpKeJD1IOkfEO7c/SLqW9CLpKSLemX1Z0q2kG0mvkmZ9bHch6UzSu6T7iPhK3W96lvQREZ+/bkj5qKSJpFdJp5J2EbFM/ZR/0BqgJOaAEcOAIdsZYOhw9gXSzgDdB/4dmANGjBgB+tIz6hUvHQn3JFBXoDRA/RdJL9CZpJ2IWPTlFzXI2u/b6JZKbUl1BVJNOeC/75GOZUDU1ht6/ANZRz8Ri0dDIwAAAABJRU5ErkJggg==');
 
-  tray = new Tray(iconDataUrl);
+  tray = new Tray(trayIcon);
   tray.setToolTip('Sentinel Security Suite — Active Protection');
 
   const contextMenu = Menu.buildFromTemplate([
@@ -763,11 +814,11 @@ function createTray() {
       click: async () => {
         try {
           const { enrichChecks } = await import('./services/scanners/mergeCheckDetails');
-          const kernel = enrichChecks(runAllKernelChecks());
-          const edr = enrichChecks(runAllEdrChecks());
-          const network = enrichChecks(runAllNetworkChecks());
-          const performance = enrichChecks(runAllPerformanceChecks());
-          const privacy = enrichChecks(runAllPrivacyChecks());
+          const kernel = enrichChecks(await runAllKernelChecks());
+          const edr = enrichChecks(await runAllEdrChecks());
+          const network = enrichChecks(await runAllNetworkChecks());
+          const performance = enrichChecks(await runAllPerformanceChecks());
+          const privacy = enrichChecks(await runAllPrivacyChecks());
           const all = [...kernel, ...edr, ...network, ...performance, ...privacy];
           const passed = all.filter((c: any) => c.status === 'pass').length;
           const score = Math.round((passed / all.length) * 100);
@@ -781,9 +832,9 @@ function createTray() {
     },
     {
       label: 'Gaming Mode',
-      click: () => {
+      click: async () => {
         try {
-          execSync('powershell -ExecutionPolicy Bypass -NoProfile -Command "powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c; Stop-Service DiagTrack -Force -EA SilentlyContinue; Stop-Service SysMain -Force -EA SilentlyContinue"', { timeout: 10000, windowsHide: true });
+          await execPromise('powershell -ExecutionPolicy Bypass -NoProfile -Command "powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c; Stop-Service DiagTrack -Force -EA SilentlyContinue; Stop-Service SysMain -Force -EA SilentlyContinue"', { timeout: 10000, windowsHide: true });
           tray?.displayBalloon({ title: 'Gaming Mode', content: 'High Performance plan + background services stopped', iconType: 'info' });
         } catch (e: any) {
           tray?.displayBalloon({ title: 'Gaming Mode', content: `Partial: ${e?.message}`, iconType: 'warning' });
@@ -828,11 +879,11 @@ function startScheduledScans() {
     console.log('[SCHEDULED] Running automatic background scan...');
     try {
       const { enrichChecks } = await import('./services/scanners/mergeCheckDetails');
-      const kernel = enrichChecks(runAllKernelChecks());
-      const edr = enrichChecks(runAllEdrChecks());
-      const network = enrichChecks(runAllNetworkChecks());
-      const performance = enrichChecks(runAllPerformanceChecks());
-      const privacy = enrichChecks(runAllPrivacyChecks());
+      const kernel = enrichChecks(await runAllKernelChecks());
+      const edr = enrichChecks(await runAllEdrChecks());
+      const network = enrichChecks(await runAllNetworkChecks());
+      const performance = enrichChecks(await runAllPerformanceChecks());
+      const privacy = enrichChecks(await runAllPrivacyChecks());
       const all = [...kernel, ...edr, ...network, ...performance, ...privacy];
       const passed = all.filter((c: any) => c.status === 'pass').length;
       const failed = all.filter((c: any) => c.status === 'fail').length;
@@ -1096,75 +1147,38 @@ ipcMain.handle('get-real-system-data', async () => {
     const cpuInfo = getCPUInfo();
     const systemInfo = getSystemInfo();
     const osInfo = getOSInfo();
-    const { spawnSync } = require('child_process');
+    const { execFile: execF } = require('child_process');
 
-    // Real disk data
+    // Single async PS call for disk, GPU, network, battery — no main thread blocking
     let disks: any[] = [];
-    try {
-      const diskResult = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', '-'], {
-        input: `Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Used -ne $null } | ForEach-Object {
-  $total = [math]::Round(($_.Used + $_.Free) / 1GB, 2)
-  $used = [math]::Round($_.Used / 1GB, 2)
-  $free = [math]::Round($_.Free / 1GB, 2)
-  $pct = if($total -gt 0){[math]::Round(($used / $total) * 100)}else{0}
-  [PSCustomObject]@{ drive=$_.Name+':'; totalGB=$total; usedGB=$used; freeGB=$free; usagePercent=$pct }
-} | ConvertTo-Json -Compress`,
-        timeout: 8000, windowsHide: true, encoding: 'utf8',
-      });
-      if (diskResult.stdout) {
-        let parsed = JSON.parse(diskResult.stdout.trim());
-        if (!Array.isArray(parsed)) parsed = parsed ? [parsed] : [];
-        disks = parsed;
-      }
-    } catch { disks = []; }
-
-    // Real GPU data
     let gpu: any[] = [];
-    try {
-      const gpuResult = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', '-'], {
-        input: `Get-CimInstance Win32_VideoController | ForEach-Object {
-  [PSCustomObject]@{ name=$_.Name; memory=[math]::Round($_.AdapterRAM / 1MB) }
-} | ConvertTo-Json -Compress`,
-        timeout: 5000, windowsHide: true, encoding: 'utf8',
-      });
-      if (gpuResult.stdout) {
-        let parsed = JSON.parse(gpuResult.stdout.trim());
-        if (!Array.isArray(parsed)) parsed = parsed ? [parsed] : [];
-        gpu = parsed;
-      }
-    } catch { gpu = []; }
-
-    // Real network adapter data
     let network: any[] = [];
-    try {
-      const netResult = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', '-'], {
-        input: `Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | ForEach-Object {
-  $ip = (Get-NetIPAddress -InterfaceIndex $_.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Select-Object -First 1).IPAddress
-  [PSCustomObject]@{ adapter=$_.Name; status=$_.Status; ipAddress=if($ip){$ip}else{'N/A'}; macAddress=$_.MacAddress }
-} | ConvertTo-Json -Compress`,
-        timeout: 8000, windowsHide: true, encoding: 'utf8',
-      });
-      if (netResult.stdout) {
-        let parsed = JSON.parse(netResult.stdout.trim());
-        if (!Array.isArray(parsed)) parsed = parsed ? [parsed] : [];
-        network = parsed;
-      }
-    } catch { network = []; }
-
-    // Real battery data
     let battery = { status: 'N/A', percentage: 0 };
     try {
-      const batResult = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', '-'], {
-        input: `$b = Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue | Select-Object -First 1
-if($b){ [PSCustomObject]@{ status=$b.Status; percentage=$b.EstimatedChargeRemaining } | ConvertTo-Json -Compress }
-else { '{"status":"No Battery","percentage":0}' }`,
-        timeout: 5000, windowsHide: true, encoding: 'utf8',
+      const psScript = `$ErrorActionPreference='SilentlyContinue'
+$disks=Get-PSDrive -PSProvider FileSystem|Where-Object{$_.Used -ne $null}|ForEach-Object{
+  $total=[math]::Round(($_.Used+$_.Free)/1GB,2);$used=[math]::Round($_.Used/1GB,2);$free=[math]::Round($_.Free/1GB,2)
+  $pct=if($total -gt 0){[math]::Round(($used/$total)*100)}else{0}
+  [PSCustomObject]@{drive=$_.Name+':';totalGB=$total;usedGB=$used;freeGB=$free;usagePercent=$pct}}
+$gpu=Get-CimInstance Win32_VideoController|ForEach-Object{[PSCustomObject]@{name=$_.Name;memory=[math]::Round($_.AdapterRAM/1MB)}}
+$net=Get-NetAdapter|Where-Object{$_.Status -eq 'Up'}|ForEach-Object{
+  $ip=(Get-NetIPAddress -InterfaceIndex $_.ifIndex -AddressFamily IPv4 -EA SilentlyContinue|Select-Object -First 1).IPAddress
+  [PSCustomObject]@{adapter=$_.Name;status=$_.Status;ipAddress=if($ip){$ip}else{'N/A'};macAddress=$_.MacAddress}}
+$b=Get-CimInstance Win32_Battery -EA SilentlyContinue|Select-Object -First 1
+$bat=if($b){[PSCustomObject]@{status=$b.Status;percentage=$b.EstimatedChargeRemaining}}else{[PSCustomObject]@{status='No Battery';percentage=0}}
+[PSCustomObject]@{disks=@($disks);gpu=@($gpu);network=@($net);battery=$bat}|ConvertTo-Json -Depth 3 -Compress`;
+      const encoded = Buffer.from(psScript, 'utf16le').toString('base64');
+      const raw = await new Promise<string>((resolve, reject) => {
+        execF('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded],
+          { timeout: 15000, windowsHide: true, encoding: 'utf8', maxBuffer: 5 * 1024 * 1024 },
+          (err: any, stdout: string) => err ? reject(err) : resolve(stdout));
       });
-      if (batResult.stdout) {
-        const parsed = JSON.parse(batResult.stdout.trim());
-        battery = { status: parsed.status || 'N/A', percentage: parsed.percentage || 0 };
-      }
-    } catch { /* keep defaults */ }
+      const parsed = JSON.parse((raw || '{}').trim());
+      if (Array.isArray(parsed.disks)) disks = parsed.disks;
+      if (Array.isArray(parsed.gpu)) gpu = parsed.gpu;
+      if (Array.isArray(parsed.network)) network = parsed.network;
+      if (parsed.battery) battery = { status: parsed.battery.status || 'N/A', percentage: parsed.battery.percentage || 0 };
+    } catch (e: any) { console.warn('[SystemData] async PS failed:', e?.message); }
 
     return {
       success: true,
@@ -1291,60 +1305,55 @@ ipcMain.handle('execute-quick-action', async (_event, action: string) => {
     console.log(`[Quick Action] Executing: ${action}`);
     const actions: string[] = [];
 
+    const runPS = async (cmd: string, timeout = 15000): Promise<string> => {
+      const { execFile: ef } = require('child_process');
+      const enc = Buffer.from(cmd, 'utf16le').toString('base64');
+      return new Promise<string>((resolve, reject) => {
+        ef('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', enc],
+          { timeout, windowsHide: true, encoding: 'utf8' },
+          (err: any, stdout: string) => err ? reject(err) : resolve(stdout || ''));
+      });
+    };
+    const runCmd = async (cmd: string): Promise<void> => { await execPromise(cmd, { windowsHide: true, timeout: 10000 }); };
+
     if (action === 'lockdown') {
-      // Block all non-essential outbound
       try {
-        const { execSync } = require('child_process');
-        execSync('netsh advfirewall set allprofiles firewallpolicy blockinbound,blockoutbound', { windowsHide: true });
+        await runCmd('netsh advfirewall set allprofiles firewallpolicy blockinbound,blockoutbound');
         actions.push('Firewall set to block all inbound+outbound');
       } catch (e: any) { actions.push(`Firewall lockdown failed: ${e.message}`); }
     } else if (action === 'stealth') {
-      // Disable ICMP echo (ping)
       try {
-        const { execSync } = require('child_process');
-        execSync('netsh advfirewall firewall add rule name="Sentinel-Stealth-BlockPing" dir=in action=block protocol=icmpv4', { windowsHide: true });
+        await runCmd('netsh advfirewall firewall add rule name="Sentinel-Stealth-BlockPing" dir=in action=block protocol=icmpv4');
         actions.push('ICMP echo blocked (stealth mode)');
       } catch (e: any) { actions.push(`Stealth mode failed: ${e.message}`); }
     } else if (action === 'reset') {
-      // Reset firewall to defaults
       try {
-        const { execSync } = require('child_process');
-        execSync('netsh advfirewall set allprofiles firewallpolicy blockinbound,allowoutbound', { windowsHide: true });
+        await runCmd('netsh advfirewall set allprofiles firewallpolicy blockinbound,allowoutbound');
         actions.push('Firewall reset to default policy');
       } catch (e: any) { actions.push(`Reset failed: ${e.message}`); }
     } else if (action === 'gaming') {
-      // Gaming mode: High performance + disable background apps + stop telemetry services
       try {
-        const { execSync } = require('child_process');
-        execSync('powershell -ExecutionPolicy Bypass -NoProfile -Command "powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c; Set-ItemProperty -Path HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\BackgroundAccessApplications -Name GlobalUserDisabled -Value 1 -Type DWord -Force; Stop-Service DiagTrack -Force -EA SilentlyContinue; Stop-Service SysMain -Force -EA SilentlyContinue; Stop-Service BITS -Force -EA SilentlyContinue; powercfg /setacvalueindex SCHEME_CURRENT SUB_PROCESSOR CPMINCORES 100; powercfg /setactive SCHEME_CURRENT"', { timeout: 15000, windowsHide: true });
+        await runPS('powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c; Set-ItemProperty -Path HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\BackgroundAccessApplications -Name GlobalUserDisabled -Value 1 -Type DWord -Force; Stop-Service DiagTrack -Force -EA SilentlyContinue; Stop-Service SysMain -Force -EA SilentlyContinue; Stop-Service BITS -Force -EA SilentlyContinue; powercfg /setacvalueindex SCHEME_CURRENT SUB_PROCESSOR CPMINCORES 100; powercfg /setactive SCHEME_CURRENT');
         actions.push('High Performance power plan activated', 'Background UWP apps disabled', 'DiagTrack + SysMain + BITS stopped', 'Core parking disabled');
       } catch (e: any) { actions.push(`Gaming mode partial: ${e.message}`); }
     } else if (action === 'privacy') {
-      // Privacy mode: Disable telemetry, ad ID, Cortana, clipboard history, error reporting
       try {
-        const { execSync } = require('child_process');
-        execSync('powershell -ExecutionPolicy Bypass -NoProfile -Command "Set-ItemProperty -Path HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\DataCollection -Name AllowTelemetry -Value 0 -Type DWord -Force -EA SilentlyContinue; Set-ItemProperty -Path HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AdvertisingInfo -Name Enabled -Value 0 -Type DWord -Force; Set-ItemProperty -Path HKCU:\\SOFTWARE\\Microsoft\\Clipboard -Name EnableClipboardHistory -Value 0 -Type DWord -Force; Stop-Service DiagTrack -Force -EA SilentlyContinue; Set-Service DiagTrack -StartupType Disabled -EA SilentlyContinue; Stop-Service WerSvc -Force -EA SilentlyContinue; Set-Service WerSvc -StartupType Disabled -EA SilentlyContinue"', { timeout: 15000, windowsHide: true });
+        await runPS('Set-ItemProperty -Path HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\DataCollection -Name AllowTelemetry -Value 0 -Type DWord -Force -EA SilentlyContinue; Set-ItemProperty -Path HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AdvertisingInfo -Name Enabled -Value 0 -Type DWord -Force; Set-ItemProperty -Path HKCU:\\SOFTWARE\\Microsoft\\Clipboard -Name EnableClipboardHistory -Value 0 -Type DWord -Force; Stop-Service DiagTrack -Force -EA SilentlyContinue; Set-Service DiagTrack -StartupType Disabled -EA SilentlyContinue; Stop-Service WerSvc -Force -EA SilentlyContinue; Set-Service WerSvc -StartupType Disabled -EA SilentlyContinue');
         actions.push('Telemetry set to 0 (Security only)', 'Advertising ID disabled', 'Clipboard history disabled', 'DiagTrack stopped + disabled', 'Error Reporting stopped + disabled');
       } catch (e: any) { actions.push(`Privacy mode partial: ${e.message}`); }
     } else if (action === 'performance') {
-      // Performance mode: Clear standby, stop background, optimize memory
       try {
-        const { execSync } = require('child_process');
-        execSync('powershell -ExecutionPolicy Bypass -NoProfile -Command "powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c; Stop-Service SysMain -Force -EA SilentlyContinue; Stop-Service DiagTrack -Force -EA SilentlyContinue; Stop-Service BITS -Force -EA SilentlyContinue; Stop-Service wuauserv -Force -EA SilentlyContinue; [System.GC]::Collect()"', { timeout: 15000, windowsHide: true });
+        await runPS('powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c; Stop-Service SysMain -Force -EA SilentlyContinue; Stop-Service DiagTrack -Force -EA SilentlyContinue; Stop-Service BITS -Force -EA SilentlyContinue; Stop-Service wuauserv -Force -EA SilentlyContinue; [System.GC]::Collect()');
         actions.push('High Performance plan activated', 'SysMain + DiagTrack + BITS + WU paused', 'GC triggered');
       } catch (e: any) { actions.push(`Performance mode partial: ${e.message}`); }
     } else if (action === 'restore' || action === 'reset-all') {
-      // Restore defaults: Re-enable services, balanced power, allow outbound
       try {
-        const { execSync } = require('child_process');
-        execSync('powershell -ExecutionPolicy Bypass -NoProfile -Command "powercfg /setactive 381b4222-f694-41f0-9685-ff5bb260df2e; Set-Service SysMain -StartupType Automatic -EA SilentlyContinue; Start-Service SysMain -EA SilentlyContinue; Set-Service DiagTrack -StartupType Automatic -EA SilentlyContinue; Start-Service DiagTrack -EA SilentlyContinue; Set-Service BITS -StartupType Automatic -EA SilentlyContinue; Start-Service BITS -EA SilentlyContinue; Set-ItemProperty -Path HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\BackgroundAccessApplications -Name GlobalUserDisabled -Value 0 -Type DWord -Force; netsh advfirewall set allprofiles firewallpolicy blockinbound,allowoutbound"', { timeout: 15000, windowsHide: true });
+        await runPS('powercfg /setactive 381b4222-f694-41f0-9685-ff5bb260df2e; Set-Service SysMain -StartupType Automatic -EA SilentlyContinue; Start-Service SysMain -EA SilentlyContinue; Set-Service DiagTrack -StartupType Automatic -EA SilentlyContinue; Start-Service DiagTrack -EA SilentlyContinue; Set-Service BITS -StartupType Automatic -EA SilentlyContinue; Start-Service BITS -EA SilentlyContinue; Set-ItemProperty -Path HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\BackgroundAccessApplications -Name GlobalUserDisabled -Value 0 -Type DWord -Force; netsh advfirewall set allprofiles firewallpolicy blockinbound,allowoutbound');
         actions.push('Balanced power plan restored', 'SysMain + DiagTrack + BITS restarted', 'Background apps re-enabled', 'Firewall reset to default policy');
       } catch (e: any) { actions.push(`Restore partial: ${e.message}`); }
     } else if (action === 'cleanup') {
-      // Cleanup: Clear temp files, standby cache, DNS cache, thumbnail cache
       try {
-        const { execSync } = require('child_process');
-        const out = execSync('powershell -ExecutionPolicy Bypass -NoProfile -Command "$b=0; Get-ChildItem $env:TEMP -Recurse -Force -EA SilentlyContinue | Remove-Item -Recurse -Force -EA SilentlyContinue; $b+=(Get-ChildItem $env:TEMP -Recurse -Force -EA SilentlyContinue | Measure-Object -Property Length -Sum -EA SilentlyContinue).Sum; Remove-Item -Path \\"$env:LOCALAPPDATA\\Microsoft\\Windows\\Explorer\\thumbcache_*\\" -Force -EA SilentlyContinue; ipconfig /flushdns | Out-Null; Write-Output \\"CleanedBytes:$b\\""', { timeout: 30000, windowsHide: true, encoding: 'utf8' });
+        const out = await runPS('$b=0; Get-ChildItem $env:TEMP -Recurse -Force -EA SilentlyContinue | Remove-Item -Recurse -Force -EA SilentlyContinue; $b+=(Get-ChildItem $env:TEMP -Recurse -Force -EA SilentlyContinue | Measure-Object -Property Length -Sum -EA SilentlyContinue).Sum; Remove-Item -Path "$env:LOCALAPPDATA\\Microsoft\\Windows\\Explorer\\thumbcache_*" -Force -EA SilentlyContinue; ipconfig /flushdns | Out-Null; Write-Output "CleanedBytes:$b"', 30000);
         actions.push('Temp files cleaned', 'Thumbnail cache cleared', 'DNS cache flushed');
         const m = out.match(/CleanedBytes:(\d+)/);
         if (m) actions.push(`${Math.round(parseInt(m[1]) / 1048576)} MB recovered`);
@@ -1368,11 +1377,14 @@ ipcMain.handle('get-system-health', async () => {
     // Real security score: check if firewall is enabled
     let securityScore = 50; // base
     try {
-      const { execSync } = require('child_process');
-      const fwStatus = execSync(
-        'powershell -NoProfile -Command "(Get-NetFirewallProfile | Where-Object { $_.Enabled -eq $true }).Count"',
-        { encoding: 'utf-8', timeout: 5000, windowsHide: true }
-      ).trim();
+      const { execFile: ef } = require('child_process');
+      const psCmd = '(Get-NetFirewallProfile|Where-Object{$_.Enabled -eq $true}).Count';
+      const enc = Buffer.from(psCmd, 'utf16le').toString('base64');
+      const fwStatus = (await new Promise<string>((resolve, reject) => {
+        ef('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', enc],
+          { timeout: 5000, windowsHide: true, encoding: 'utf8' },
+          (err: any, stdout: string) => err ? reject(err) : resolve(stdout));
+      })).trim();
       const enabledProfiles = parseInt(fwStatus, 10);
       if (enabledProfiles >= 3) securityScore = 95;
       else if (enabledProfiles >= 2) securityScore = 80;
@@ -1382,11 +1394,14 @@ ipcMain.handle('get-system-health', async () => {
     // Real privacy score: check if telemetry is restricted
     let privacyScore = 60; // base
     try {
-      const { execSync } = require('child_process');
-      const telemetry = execSync(
-        'powershell -NoProfile -Command "(Get-ItemProperty -Path HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\DataCollection -Name AllowTelemetry -ErrorAction SilentlyContinue).AllowTelemetry"',
-        { encoding: 'utf-8', timeout: 3000, windowsHide: true }
-      ).trim();
+      const { execFile: ef } = require('child_process');
+      const psCmd2 = '(Get-ItemProperty -Path HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection -Name AllowTelemetry -EA SilentlyContinue).AllowTelemetry';
+      const enc2 = Buffer.from(psCmd2, 'utf16le').toString('base64');
+      const telemetry = (await new Promise<string>((resolve, reject) => {
+        ef('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', enc2],
+          { timeout: 3000, windowsHide: true, encoding: 'utf8' },
+          (err: any, stdout: string) => err ? reject(err) : resolve(stdout));
+      })).trim();
       const level = parseInt(telemetry, 10);
       if (level === 0) privacyScore = 95;
       else if (level === 1) privacyScore = 80;
@@ -1433,11 +1448,14 @@ ipcMain.handle('get-system-stats', async () => {
     // Real disk usage
     let diskPercent = -1;
     try {
-      const { execSync } = require('child_process');
-      const diskOut = execSync(
-        'powershell -NoProfile -Command "(Get-PSDrive C).Used / ((Get-PSDrive C).Used + (Get-PSDrive C).Free) * 100"',
-        { encoding: 'utf-8', timeout: 5000, windowsHide: true }
-      ).trim();
+      const { execFile: ef } = require('child_process');
+      const psCmd = '(Get-PSDrive C).Used/((Get-PSDrive C).Used+(Get-PSDrive C).Free)*100';
+      const enc = Buffer.from(psCmd, 'utf16le').toString('base64');
+      const diskOut = (await new Promise<string>((resolve, reject) => {
+        ef('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', enc],
+          { timeout: 5000, windowsHide: true, encoding: 'utf8' },
+          (err: any, stdout: string) => err ? reject(err) : resolve(stdout));
+      })).trim();
       diskPercent = Math.round(parseFloat(diskOut));
       if (isNaN(diskPercent)) diskPercent = -1;
     } catch { diskPercent = -1; }
@@ -1507,7 +1525,7 @@ ipcMain.handle('shield-get-security-overview', async () => {
 ipcMain.handle('sentinel-kernel-scan', async () => {
   try {
     const { enrichChecks } = await import('./services/scanners/mergeCheckDetails');
-    const checks = enrichChecks(runAllKernelChecks());
+    const checks = enrichChecks(await runAllKernelChecks());
     const passed = checks.filter((c: any) => c.status === 'pass').length;
     const score = Math.round((passed / checks.length) * 100);
     return { success: true, module: 'kernel', checks, passed, total: checks.length, score };
@@ -1517,7 +1535,7 @@ ipcMain.handle('sentinel-kernel-scan', async () => {
 ipcMain.handle('sentinel-edr-scan', async () => {
   try {
     const { enrichChecks } = await import('./services/scanners/mergeCheckDetails');
-    const checks = enrichChecks(runAllEdrChecks());
+    const checks = enrichChecks(await runAllEdrChecks());
     const passed = checks.filter((c: any) => c.status === 'pass').length;
     const score = Math.round((passed / checks.length) * 100);
     return { success: true, module: 'edr', checks, passed, total: checks.length, score };
@@ -1527,7 +1545,7 @@ ipcMain.handle('sentinel-edr-scan', async () => {
 ipcMain.handle('sentinel-network-scan', async () => {
   try {
     const { enrichChecks } = await import('./services/scanners/mergeCheckDetails');
-    const checks = enrichChecks(runAllNetworkChecks());
+    const checks = enrichChecks(await runAllNetworkChecks());
     const passed = checks.filter((c: any) => c.status === 'pass').length;
     const score = Math.round((passed / checks.length) * 100);
     return { success: true, module: 'network', checks, passed, total: checks.length, score };
@@ -1537,7 +1555,7 @@ ipcMain.handle('sentinel-network-scan', async () => {
 ipcMain.handle('sentinel-performance-scan', async () => {
   try {
     const { enrichChecks } = await import('./services/scanners/mergeCheckDetails');
-    const checks = enrichChecks(runAllPerformanceChecks());
+    const checks = enrichChecks(await runAllPerformanceChecks());
     const passed = checks.filter((c: any) => c.status === 'pass').length;
     const score = Math.round((passed / checks.length) * 100);
     return { success: true, module: 'performance', checks, passed, total: checks.length, score };
@@ -1547,29 +1565,57 @@ ipcMain.handle('sentinel-performance-scan', async () => {
 ipcMain.handle('sentinel-privacy-scan', async () => {
   try {
     const { enrichChecks } = await import('./services/scanners/mergeCheckDetails');
-    const checks = enrichChecks(runAllPrivacyChecks());
+    const checks = enrichChecks(await runAllPrivacyChecks());
     const passed = checks.filter((c: any) => c.status === 'pass').length;
     const score = Math.round((passed / checks.length) * 100);
     return { success: true, module: 'privacy', checks, passed, total: checks.length, score };
   } catch (e: any) { return { success: false, error: e.message }; }
 });
 
+ipcMain.handle('sentinel-set-scan-language', async (_event, lang: string) => {
+  const { setCheckLanguage } = await import('./services/scanners/mergeCheckDetails');
+  setCheckLanguage(lang === 'en' ? 'en' : 'de');
+  return { success: true, lang };
+});
+
 ipcMain.handle('sentinel-full-scan', async () => {
+  const SCAN_TIMEOUT_MS = 300_000;
+  const startTime = Date.now();
+  const send = (phase: string) => { try { mainWindow?.webContents.send('sentinel-scan-progress', { phase, elapsed: Date.now() - startTime }); } catch { /* window may be closed */ } };
+
   try {
     const { enrichChecks } = await import('./services/scanners/mergeCheckDetails');
-    const kernel = enrichChecks(runAllKernelChecks());
-    const edr = enrichChecks(runAllEdrChecks());
-    const network = enrichChecks(runAllNetworkChecks());
-    const performance = enrichChecks(runAllPerformanceChecks());
-    const privacy = enrichChecks(runAllPrivacyChecks());
+    const modScore = (arr: any[]) => { const p = arr.filter((c: any) => c.status === 'pass').length; return { checks: arr, passed: p, total: arr.length, score: Math.round((p / arr.length) * 100) }; };
+    const elapsed = () => Date.now() - startTime;
+    const timedOut = () => elapsed() >= SCAN_TIMEOUT_MS;
+
+    send('kernel');
+    const kernel = enrichChecks(await runAllKernelChecks());
+    if (timedOut()) { const all = [...kernel]; const passed = all.filter((c: any) => c.status === 'pass').length; return { success: true, partial: true, score: Math.round((passed / all.length) * 100), total: all.length, passed, failed: all.filter((c: any) => c.status === 'fail').length, warnings: all.filter((c: any) => c.status === 'warn').length, modules: { kernel: modScore(kernel), edr: modScore([]), network: modScore([]), performance: modScore([]), privacy: modScore([]) }, timeoutMs: SCAN_TIMEOUT_MS }; }
+
+    send('edr');
+    const edr = enrichChecks(await runAllEdrChecks());
+    if (timedOut()) { const all = [...kernel, ...edr]; const passed = all.filter((c: any) => c.status === 'pass').length; return { success: true, partial: true, score: Math.round((passed / all.length) * 100), total: all.length, passed, failed: all.filter((c: any) => c.status === 'fail').length, warnings: all.filter((c: any) => c.status === 'warn').length, modules: { kernel: modScore(kernel), edr: modScore(edr), network: modScore([]), performance: modScore([]), privacy: modScore([]) }, timeoutMs: SCAN_TIMEOUT_MS }; }
+
+    send('network');
+    const network = enrichChecks(await runAllNetworkChecks());
+    if (timedOut()) { const all = [...kernel, ...edr, ...network]; const passed = all.filter((c: any) => c.status === 'pass').length; return { success: true, partial: true, score: Math.round((passed / all.length) * 100), total: all.length, passed, failed: all.filter((c: any) => c.status === 'fail').length, warnings: all.filter((c: any) => c.status === 'warn').length, modules: { kernel: modScore(kernel), edr: modScore(edr), network: modScore(network), performance: modScore([]), privacy: modScore([]) }, timeoutMs: SCAN_TIMEOUT_MS }; }
+
+    send('performance');
+    const performance = enrichChecks(await runAllPerformanceChecks());
+    if (timedOut()) { const all = [...kernel, ...edr, ...network, ...performance]; const passed = all.filter((c: any) => c.status === 'pass').length; return { success: true, partial: true, score: Math.round((passed / all.length) * 100), total: all.length, passed, failed: all.filter((c: any) => c.status === 'fail').length, warnings: all.filter((c: any) => c.status === 'warn').length, modules: { kernel: modScore(kernel), edr: modScore(edr), network: modScore(network), performance: modScore(performance), privacy: modScore([]) }, timeoutMs: SCAN_TIMEOUT_MS }; }
+
+    send('privacy');
+    const privacy = enrichChecks(await runAllPrivacyChecks());
+
+    send('done');
     const all = [...kernel, ...edr, ...network, ...performance, ...privacy];
     const passed = all.filter((c: any) => c.status === 'pass').length;
     const failed = all.filter((c: any) => c.status === 'fail').length;
     const warnings = all.filter((c: any) => c.status === 'warn').length;
     const score = Math.round((passed / all.length) * 100);
-    const modScore = (arr: any[]) => { const p = arr.filter((c: any) => c.status === 'pass').length; return { checks: arr, passed: p, total: arr.length, score: Math.round((p / arr.length) * 100) }; };
     return {
-      success: true, score, total: all.length, passed, failed, warnings,
+      success: true, score, total: all.length, passed, failed, warnings, elapsedMs: elapsed(),
       modules: { kernel: modScore(kernel), edr: modScore(edr), network: modScore(network), performance: modScore(performance), privacy: modScore(privacy) },
     };
   } catch (e: any) { return { success: false, error: e.message }; }
@@ -1616,12 +1662,12 @@ const SCAN_FIX_COMMANDS: Record<string, { label: string; ps: string }> = {
   'perf-hags': { label: 'Enable Hardware GPU Scheduling', ps: `Set-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\GraphicsDrivers' -Name HwSchMode -Value 2 -Type DWord -Force` },
   'perf-telemetry': { label: 'Stop telemetry services', ps: `Stop-Service DiagTrack -Force -EA SilentlyContinue; Set-Service DiagTrack -StartupType Disabled; Stop-Service dmwappushservice -Force -EA SilentlyContinue; Set-Service dmwappushservice -StartupType Disabled -EA SilentlyContinue` },
   'perf-winsxs': { label: 'Clean WinSxS component store', ps: `Dism.exe /online /Cleanup-Image /StartComponentCleanup /ResetBase` },
-  'perf-writecache': { label: 'Enable disk write cache', ps: `$d=Get-Disk -Number 0 -EA SilentlyContinue; if($d){Set-Disk -Number 0 -IsCacheEnabled $true -EA SilentlyContinue}` },
+  'perf-writecache': { label: 'Enable disk write cache', ps: `Get-PnpDevice -Class DiskDrive -Status OK -EA SilentlyContinue | ForEach-Object { $path="HKLM:\\SYSTEM\\CurrentControlSet\\Enum\\$($_.InstanceId)\\Device Parameters\\Disk"; if(Test-Path $path){ Set-ItemProperty -Path $path -Name UserWriteCacheSetting -Value 1 -Type DWord -Force -EA SilentlyContinue } }; diskperf -Y 2>$null; Write-Output 'Disk write cache enabled'` },
   'perf-pagefile': { label: 'Optimize pagefile (auto-managed)', ps: `$cs=Get-CimInstance Win32_ComputerSystem; $cs.AutomaticManagedPagefile=$true; Set-CimInstance $cs -EA SilentlyContinue` },
   'perf-standby': { label: 'Clear standby list', ps: `$code='[DllImport("ntdll.dll")]public static extern int NtSetSystemInformation(int i,ref int d,int l);';$t=Add-Type -MemberDefinition $code -Name 'Mem' -PassThru;$v=4;$t::NtSetSystemInformation(80,[ref]$v,4)|Out-Null` },
   'perf-ioprio': { label: 'Pause BITS & Windows Update', ps: `Stop-Service BITS -Force -EA SilentlyContinue; Stop-Service wuauserv -Force -EA SilentlyContinue` },
   // ─── Privacy checks ───
-  'priv-dnsleak': { label: 'Fix DNS leak (VPN-only DNS)', ps: `$iface=(Get-NetAdapter|Where-Object{$_.Status-eq'Up'-and$_.InterfaceDescription-notmatch'NordLynx|WireGuard|TAP-|TUN|OpenVPN'}|Select-Object -First 1).InterfaceIndex; Set-DnsClientServerAddress -InterfaceIndex $iface -ServerAddresses ('1.1.1.1','1.0.0.1') -EA SilentlyContinue; ipconfig /flushdns | Out-Null` },
+  'priv-dnsleak': { label: 'Fix DNS leak (VPN-only DNS)', ps: `$vpn=Get-NetAdapter|Where-Object{$_.InterfaceDescription-match'NordLynx|WireGuard|TAP-|TUN|OpenVPN|Surfshark|Mullvad|ProtonVPN|ExpressVPN'-and$_.Status-eq'Up'}|Select-Object -First 1; $phys=Get-NetAdapter|Where-Object{$_.Status-eq'Up'-and$_.InterfaceDescription-notmatch'NordLynx|WireGuard|TAP-|TUN|OpenVPN|Surfshark|Mullvad|ProtonVPN|ExpressVPN'}|Select-Object -First 1; if($vpn){ $vpnDns=@(); if($vpn.InterfaceDescription-match'NordLynx|NordVPN'){$vpnDns=@('103.86.96.100','103.86.99.100')}elseif($vpn.InterfaceDescription-match'Mullvad'){$vpnDns=@('100.64.0.1')}elseif($vpn.InterfaceDescription-match'ProtonVPN'){$vpnDns=@('10.2.0.1')}else{$vpnDns=@('1.1.1.1','1.0.0.1')}; if($phys){Set-DnsClientServerAddress -InterfaceIndex $phys.ifIndex -ServerAddresses $vpnDns -EA SilentlyContinue}; netsh advfirewall firewall delete rule name="Sentinel-BlockNonVPNDNS" 2>$null; netsh advfirewall firewall add rule name="Sentinel-BlockNonVPNDNS" dir=out protocol=udp remoteport=53 action=block interfacetype=lan 2>$null; netsh advfirewall firewall add rule name="Sentinel-AllowVPNDNS" dir=out protocol=udp remoteport=53 action=allow interface="$($vpn.Name)" 2>$null }else{ if($phys){Set-DnsClientServerAddress -InterfaceIndex $phys.ifIndex -ServerAddresses ('1.1.1.1','1.0.0.1') -EA SilentlyContinue} }; ipconfig /flushdns | Out-Null` },
   'priv-usb': { label: 'Disable USB mass storage', ps: `Set-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Services\\USBSTOR' -Name Start -Value 4 -Type DWord -Force` },
   'priv-lockscreen': { label: 'Harden lock screen', ps: `New-Item -Path 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\Personalization' -Force -EA SilentlyContinue | Out-Null; Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\Personalization' -Name NoLockScreenCamera -Value 1 -Type DWord -Force; New-Item -Path 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\Windows Search' -Force -EA SilentlyContinue | Out-Null; Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\Windows Search' -Name AllowCortanaAboveLock -Value 0 -Type DWord -Force` },
   'priv-bluetooth': { label: 'Disable Bluetooth service', ps: `Stop-Service bthserv -Force -EA SilentlyContinue; Set-Service bthserv -StartupType Disabled -EA SilentlyContinue` },
@@ -1636,7 +1682,7 @@ const SCAN_FIX_COMMANDS: Record<string, { label: string; ps: string }> = {
   'priv-wifisense': { label: 'Disable WiFi Sense', ps: `Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\WcmSvc\\wifinetworkmanager\\config' -Name AutoConnectAllowedOEM -Value 0 -Type DWord -Force` },
   'priv-uac': { label: 'Enforce strict UAC', ps: `Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System' -Name ConsentPromptBehaviorAdmin -Value 2 -Type DWord -Force; Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System' -Name PromptOnSecureDesktop -Value 1 -Type DWord -Force` },
   // ─── Privacy (missing) ───
-  'priv-hwid': { label: 'Restrict Hardware ID access', ps: `$acl=Get-Acl 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\SystemInformation'; $rule=New-Object System.Security.AccessControl.RegistryAccessRule('Users','ReadKey','Deny'); $acl.AddAccessRule($rule); Set-Acl 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\SystemInformation' $acl -EA SilentlyContinue` },
+  'priv-hwid': { label: 'Restrict Hardware ID access', ps: `Import-Module Microsoft.PowerShell.Security -EA Stop; $key=[Microsoft.Win32.Registry]::LocalMachine.OpenSubKey('SYSTEM\\CurrentControlSet\\Control\\SystemInformation',[Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree,[System.Security.AccessControl.RegistryRights]::ChangePermissions); $acl=$key.GetAccessControl(); $rule=New-Object System.Security.AccessControl.RegistryAccessRule('Users','ReadKey','Deny'); $acl.AddAccessRule($rule); $key.SetAccessControl($acl); $key.Close()` },
   'priv-antikeylog': { label: 'Disable typing data collection', ps: `Set-ItemProperty -Path 'HKCU:\\SOFTWARE\\Microsoft\\Input\\TIPC' -Name Enabled -Value 0 -Type DWord -Force` },
   'priv-fingerprint': { label: 'Disable activity tracking', ps: `Set-ItemProperty -Path 'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced' -Name Start_TrackProgs -Value 0 -Type DWord -Force; Set-ItemProperty -Path 'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced' -Name Start_TrackDocs -Value 0 -Type DWord -Force` },
   // ─── Network (missing) ───
@@ -1661,7 +1707,37 @@ const SCAN_FIX_COMMANDS: Record<string, { label: string; ps: string }> = {
   'kernel-msr': { label: 'Set CPU mitigation flags', ps: `Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management' -Name FeatureSettingsOverride -Value 0 -Type DWord -Force; Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management' -Name FeatureSettingsOverrideMask -Value 3 -Type DWord -Force` },
   // ─── Performance (missing) ───
   'perf-mft': { label: 'Check & repair NTFS volume', ps: `chkdsk C: /scan /perf` },
-  'perf-etw': { label: 'Enable ETW performance tracing', ps: `logman start "Sentinel-Perf" -p "Microsoft-Windows-Kernel-Process" -o "$env:LOCALAPPDATA\Sentinel\perf.etl" -ets -EA SilentlyContinue` },
+  'perf-etw': { label: 'Enable ETW performance tracing', ps: `logman start "Sentinel-Perf" -p "Microsoft-Windows-Kernel-Process" -o "$env:LOCALAPPDATA\\Sentinel\\perf.etl" -ets -EA SilentlyContinue` },
+  'perf-dpc': { label: 'Disable USB power saving (DPC fix)', ps: `Get-PnpDevice -Class USB -Status OK -EA SilentlyContinue | ForEach-Object { $path="HKLM:\\SYSTEM\\CurrentControlSet\\Enum\\$($_.InstanceId)\\Device Parameters"; if(Test-Path $path){ Set-ItemProperty -Path $path -Name EnhancedPowerManagementEnabled -Value 0 -Type DWord -Force -EA SilentlyContinue; Set-ItemProperty -Path $path -Name AllowIdleIrpInD3 -Value 0 -Type DWord -Force -EA SilentlyContinue } }; powercfg /setacvalueindex SCHEME_CURRENT 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 0; powercfg /setactive SCHEME_CURRENT` },
+  'perf-memcomp': { label: 'Optimize memory compression', ps: '$ram=[math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB); if($ram -ge 16){ Disable-MMAgent -MemoryCompression -EA SilentlyContinue; Write-Output "Memory compression disabled ($($ram)GB RAM)" }else{ Enable-MMAgent -MemoryCompression -EA SilentlyContinue; Write-Output "Memory compression kept enabled ($($ram)GB RAM)" }' },
+  // ─── EDR (newly added) ───
+  'edr-syscall': { label: 'Enable syscall integrity (HVCI + ETW)', ps: `$ErrorActionPreference='Stop'; $vbs=(Get-CimInstance -ClassName Win32_DeviceGuard -Namespace root\\Microsoft\\Windows\\DeviceGuard -EA SilentlyContinue); if(-not $vbs -or $vbs.VirtualizationBasedSecurityStatus -eq 0){ $capable=$false; try{ $cpu=Get-CimInstance Win32_Processor -EA SilentlyContinue; if($cpu.VirtualizationFirmwareEnabled){ $capable=$true } }catch{}; if(-not $capable){ Write-Output 'WARNUNG: VBS/Hyper-V wird von dieser Hardware nicht unterstuetzt. HVCI kann nicht aktiviert werden.'; throw 'VBS not supported on this hardware — HVCI cannot be enabled' } }; $hvci='HKLM:\\SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\HypervisorEnforcedCodeIntegrity'; New-Item -Path $hvci -Force -EA SilentlyContinue|Out-Null; Set-ItemProperty -Path $hvci -Name Enabled -Value 1 -Type DWord -Force; Set-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\DeviceGuard' -Name EnableVirtualizationBasedSecurity -Value 1 -Type DWord -Force; logman start 'Sentinel-Syscall-ETW' -p 'Microsoft-Windows-Kernel-Audit-API-Calls' -o "$env:LOCALAPPDATA\\Sentinel\\syscall_etw.etl" -ets -EA SilentlyContinue; Write-Output 'HVCI enabled + ETW syscall tracing configured — reboot required'` },
+  'edr-honeypot': { label: 'Deploy honeypot bait files', ps: `$dirs=@("$env:USERPROFILE\\Documents","$env:USERPROFILE\\Desktop","$env:PUBLIC\\Documents"); foreach($d in $dirs){ $f=Join-Path $d '.sentinel_canary.docx'; if(-not(Test-Path $f)){ [System.IO.File]::WriteAllText($f,'SENTINEL CANARY — DO NOT DELETE — This file is monitored for unauthorized access.'); (Get-Item $f).Attributes='Hidden' } }; Write-Output "Bait files deployed in $($dirs.Count) directories"` },
+  'edr-hollowing': { label: 'Scan for hollowed processes', ps: `$suspicious=@(); Get-Process -EA SilentlyContinue | Where-Object { $_.Path -and $_.Path -notmatch 'Windows|Program Files|System32' -and $_.ProcessName -match 'svchost|csrss|lsass|services|smss|wininit' } | ForEach-Object { $suspicious += $_.ProcessName }; if($suspicious.Count -gt 0){ Write-Output "WARNING: $($suspicious.Count) suspicious system processes from non-standard paths: $($suspicious -join ', ')" }else{ Write-Output 'All system processes from legitimate paths' }` },
+  'edr-reflectivedll': { label: 'Enable exploit protection for DLL injection', ps: `Set-ProcessMitigation -System -Enable DEP,CFG,SEHOP,ForceRelocateImages -EA SilentlyContinue; Write-Output 'System-wide exploit mitigations enabled (DEP, CFG, SEHOP, ForceRelocateImages)'` },
+  'edr-apc': { label: 'Enable process creation auditing', ps: `auditpol /set /subcategory:"Process Creation" /success:enable /failure:enable; Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System\\Audit' -Name ProcessCreationIncludeCmdLine_Enabled -Value 1 -Type DWord -Force -EA SilentlyContinue; Write-Output 'Process creation auditing enabled with command-line logging'` },
+  'edr-entropy': { label: 'Enable Controlled Folder Access', ps: `Set-MpPreference -EnableControlledFolderAccess Enabled -EA SilentlyContinue; Write-Output 'Controlled Folder Access enabled — ransomware file encryption blocked'` },
+  'edr-ppid': { label: 'Enable process creation audit (Event 4688)', ps: `auditpol /set /subcategory:"Process Creation" /success:enable /failure:enable; New-Item -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System\\Audit' -Force -EA SilentlyContinue | Out-Null; Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System\\Audit' -Name ProcessCreationIncludeCmdLine_Enabled -Value 1 -Type DWord -Force; Write-Output 'Process creation auditing + command-line logging enabled'` },
+  'edr-com': { label: 'Audit user COM hijacking', ps: `$count=(Get-ChildItem 'HKCU:\\SOFTWARE\\Classes\\CLSID' -EA SilentlyContinue | Measure-Object).Count; if($count -gt 20){ Write-Output "WARNING: $count user CLSIDs found — review for suspicious entries"; Get-ChildItem 'HKCU:\\SOFTWARE\\Classes\\CLSID' -EA SilentlyContinue | Select-Object -First 10 | ForEach-Object { Write-Output $_.Name } }else{ Write-Output "$count user CLSIDs — within normal range" }` },
+  'edr-behavior': { label: 'Block unsigned high-CPU processes', ps: `Set-MpPreference -EnableNetworkProtection 1 -EA SilentlyContinue; Set-MpPreference -PUAProtection 1 -EA SilentlyContinue; Write-Output 'Network Protection + PUA Protection enabled'` },
+  'edr-apimap': { label: 'Install Sysmon for API monitoring', ps: `$sysmon=Get-Service Sysmon* -EA SilentlyContinue; if($sysmon){ Write-Output "Sysmon already installed: $($sysmon.Status)" }else{ Write-Output 'Sysmon not installed. Download from: https://docs.microsoft.com/sysinternals/downloads/sysmon — then run: sysmon -accepteula -i sysmonconfig.xml' }` },
+  'edr-handles': { label: 'Restrict LSASS handle access', ps: `Set-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Lsa' -Name RunAsPPL -Value 1 -Type DWord -Force; Set-MpPreference -AttackSurfaceReductionRules_Ids 9e6c4e1f-7d60-472f-ba1a-a39ef669e4b2 -AttackSurfaceReductionRules_Actions Enabled -EA SilentlyContinue; Write-Output 'LSASS PPL enabled + ASR rule for credential stealing active'` },
+  'edr-namedpipe': { label: 'Audit named pipes', ps: `$pipes=[System.IO.Directory]::GetFiles('\\\\.\\pipe\\') -EA SilentlyContinue; $suspicious=$pipes | Where-Object { $_ -match 'msagent_|MSSE-|postex_|status_|mojo\\.' }; if($suspicious){ Write-Output "WARNING: $($suspicious.Count) suspicious named pipes found"; $suspicious | ForEach-Object { Write-Output $_ } }else{ Write-Output "All $($pipes.Count) named pipes from known system services" }` },
+  'edr-dlls': { label: 'Enable SafeDllSearchMode', ps: `Set-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Session Manager' -Name SafeDllSearchMode -Value 1 -Type DWord -Force; Set-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Session Manager' -Name CWDIllegalInDllSearch -Value 2 -Type DWord -Force; Write-Output 'SafeDllSearchMode enabled, CWD removed from DLL search path'` },
+  'edr-schtask': { label: 'Audit scheduled tasks', ps: `$tasks=Get-ScheduledTask -EA SilentlyContinue | Where-Object { $_.State -ne 'Disabled' -and $_.Author -notmatch 'Microsoft|Windows' -and $_.TaskPath -notmatch 'Microsoft|Windows' }; if($tasks.Count -gt 0){ Write-Output "Found $($tasks.Count) non-Microsoft scheduled tasks:"; $tasks | Select-Object -First 10 | ForEach-Object { Write-Output "  $($_.TaskName) — $($_.TaskPath)" } }else{ Write-Output 'All active scheduled tasks from Microsoft/Windows' }` },
+  'edr-svcaudit': { label: 'Audit non-Microsoft services', ps: `$svcs=Get-CimInstance Win32_Service -EA SilentlyContinue | Where-Object { $_.PathName -and $_.PathName -notmatch 'Windows|Microsoft|System32|SysWOW64' -and $_.State -eq 'Running' }; if($svcs.Count -gt 0){ Write-Output "$($svcs.Count) non-Microsoft services running:"; $svcs | Select-Object -First 10 | ForEach-Object { Write-Output "  $($_.Name) — $($_.PathName)" } }else{ Write-Output 'All running services from standard system paths' }` },
+  'edr-nla': { label: 'Enable NLA for RDP', ps: `Set-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp' -Name UserAuthentication -Value 1 -Type DWord -Force; Set-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp' -Name SecurityLayer -Value 2 -Type DWord -Force; Write-Output 'NLA required for all RDP connections'` },
+  'edr-asr': { label: 'Enable ASR rules (audit mode)', ps: `$rules=@('BE9BA2D9-53EA-4CDC-84E5-9B1EEEE46550','D4F940AB-401B-4EFC-AADC-AD5F3C50688A','3B576869-A4EC-4529-8536-B80A7769E899','75668C1F-73B5-4CF0-BB93-3ECF5CB7CC84','D3E037E1-3EB8-44C8-A917-57927947596D','5BEB7EFE-FD9A-4556-801D-275E5FFC04CC','92E97FA1-2EDF-4476-BDD6-9DD0B4DDDC7B','01443614-CD74-433A-B99E-2ECDC07BFC25','C1DB55AB-C21A-4637-BB3F-A12568109D35','9E6C4E1F-7D60-472F-BA1A-A39EF669E4B2','D1E49AAC-8F56-4280-B9BA-993A6D77406C','B2B3F03D-6A65-4F7B-A9C7-1C7EF74A9BA4','26190899-1602-49E8-8B27-EB1D0A1CE869','7674BA52-37EB-4A4F-A9A1-F0F9A1619A2C','E6DB77E5-3DF2-4CF1-B95A-636979351E5B','56A863A9-875E-4185-98A7-B882C64B5CE5'); foreach($r in $rules){ Add-MpPreference -AttackSurfaceReductionRules_Ids $r -AttackSurfaceReductionRules_Actions AuditMode -EA SilentlyContinue }; Write-Output "Enabled $($rules.Count) ASR rules in Audit mode"` },
+  'edr-etwti': { label: 'Enable ETW Threat Intelligence provider', ps: `logman start "Sentinel-ETW-TI" -p "Microsoft-Windows-Threat-Intelligence" 0xFFFFFFFF -o "$env:LOCALAPPDATA\\Sentinel\\etw_ti.etl" -ets -EA SilentlyContinue; Write-Output 'ETW-TI provider started'` },
+  // ─── Kernel (newly added) ───
+  'kernel-privesc': { label: 'Harden privilege escalation paths', ps: `Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System' -Name EnableLUA -Value 1 -Type DWord -Force; Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System' -Name ConsentPromptBehaviorAdmin -Value 2 -Type DWord -Force; Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System' -Name FilterAdministratorToken -Value 1 -Type DWord -Force; Set-ItemProperty -Path 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\Installer' -Name AlwaysInstallElevated -Value 0 -Type DWord -Force -EA SilentlyContinue; Write-Output 'UAC hardened, FilterAdministratorToken enabled, AlwaysInstallElevated disabled'` },
+  'kernel-integrity': { label: 'Run System File Checker', ps: `sfc /scannow 2>&1; Write-Output 'System File Checker completed — check CBS.log for details'` },
+  'kernel-driverpaths': { label: 'Audit non-system kernel drivers', ps: `$drivers=Get-CimInstance Win32_SystemDriver -EA SilentlyContinue | Where-Object { $_.PathName -and $_.PathName -notmatch 'system32|SystemRoot|Windows' -and $_.State -eq 'Running' }; if($drivers.Count -gt 0){ Write-Output "$($drivers.Count) kernel drivers from non-system paths:"; $drivers | ForEach-Object { Write-Output "  $($_.Name) — $($_.PathName)" } }else{ Write-Output 'All kernel drivers from system paths' }` },
+  'kernel-dkom': { label: 'Verify kernel object integrity', ps: `$wmi=(Get-CimInstance Win32_Process -EA SilentlyContinue | Measure-Object).Count; $ps=(Get-Process -EA SilentlyContinue | Measure-Object).Count; $diff=[math]::Abs($wmi-$ps); if($diff -gt 5){ Write-Output "WARNING: Process count mismatch WMI:$wmi vs PS:$ps (diff:$diff) — possible hidden processes" }else{ Write-Output "Process counts consistent WMI:$wmi PS:$ps (diff:$diff)" }` },
+  'kernel-microcode': { label: 'Check CPU microcode status', ps: `$cpu=Get-CimInstance Win32_Processor | Select-Object -First 1; $rev=(Get-ItemProperty 'HKLM:\\HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0' -EA SilentlyContinue).Update Revision; Write-Output "CPU: $($cpu.Name)"; Write-Output "Microcode revision: $rev"; Write-Output 'Update via Windows Update or BIOS/UEFI firmware update from manufacturer'` },
+  // ─── Network (newly added) ───
+  'net-beacon': { label: 'Block top beaconing IPs', ps: `Write-Output 'Beaconing analysis — add suspicious IPs to firewall watchlist via Network Monitor → Watchlist tab'; New-NetFirewallRule -DisplayName 'Sentinel-Block-Beacon-Placeholder' -Direction Outbound -Action Block -Enabled False -Description 'Add beaconing IPs to RemoteAddress field' -EA SilentlyContinue; Write-Output 'Created placeholder firewall rule — configure via Firewall page'` },
+  'net-netflow': { label: 'Close suspicious listeners', ps: `$listeners=Get-NetTCPConnection -State Listen -EA SilentlyContinue | Where-Object { $_.LocalPort -notin @(80,443,445,135,139,5357,7680,49664,49665,49666,49667,49668,49669,49670) }; if($listeners.Count -gt 0){ Write-Output "$($listeners.Count) non-standard listening ports:"; $listeners | ForEach-Object { $p=Get-Process -Id $_.OwningProcess -EA SilentlyContinue; Write-Output "  Port $($_.LocalPort) — PID $($_.OwningProcess) ($($p.ProcessName))" } }else{ Write-Output 'Only standard system ports listening' }` },
 };
 
 // ════════════════════════════════════════════════════════════════
@@ -1711,13 +1787,54 @@ ipcMain.handle('scan-apply-fix', async (_event, checkId: string) => {
 
   const impact = getFixImpact(checkId, fix.label);
 
+  // ═══ SAFETY GATE 1.5: USB Storage pre-check ═══
+  if (checkId === 'priv-usb') {
+    try {
+      const { execFile: execFUsb } = require('child_process');
+      const usbPs = `$usbDisks = Get-Disk | Where-Object { $_.BusType -eq 'USB' }; $cwd = (Get-Item .).PSDrive.Name + ':'; $cwdDisk = Get-Partition -DriveLetter $cwd.Substring(0,1) -EA SilentlyContinue | Get-Disk -EA SilentlyContinue; $onUsb = if($cwdDisk -and $cwdDisk.BusType -eq 'USB'){$true}else{$false}; [PSCustomObject]@{ Count=$usbDisks.Count; OnUsb=$onUsb; Names=($usbDisks.FriendlyName -join ', ') } | ConvertTo-Json -Compress`;
+      const usbEncoded = Buffer.from(usbPs, 'utf16le').toString('base64');
+      const usbCheck = await new Promise<string>((resolve, reject) => {
+        execFUsb('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', usbEncoded],
+          { timeout: 8000, windowsHide: true, encoding: 'utf8' },
+          (err: any, stdout: string) => err ? reject(err) : resolve((stdout || '').trim()));
+      });
+      if (usbCheck) {
+        const usbData = JSON.parse(usbCheck);
+        if (usbData.OnUsb) {
+          return {
+            success: false,
+            error: 'BLOCKIERT: Sentinel läuft von einer USB-Festplatte! Dieser Fix würde das System sofort unbenutzbar machen.\n\nBLOCKED: Sentinel runs from a USB drive! This fix would immediately brick the system.',
+            forbidden: true, label: fix.label, checkId,
+          };
+        }
+        if (usbData.Count > 0) {
+          return {
+            success: false,
+            error: `USB-Geräte erkannt: ${usbData.Names || usbData.Count + ' Geräte'}. Bitte alle USB-Speichergeräte entfernen und erneut versuchen, oder den Fix überspringen.\n\nUSB devices detected: ${usbData.Names || usbData.Count + ' devices'}. Please remove all USB storage devices and retry, or skip this fix.`,
+            usbDevicesConnected: true, label: fix.label, checkId,
+          };
+        }
+      }
+    } catch (e: any) {
+      console.warn('[USB Safety] Pre-check failed:', e?.message);
+      // Allow fix to proceed if check fails — FixConfirmDialog still shows warning
+    }
+  }
+
   // ═══ EXECUTE FIX ═══
   try {
-    const { execSync } = require('child_process');
-    execSync(
-      `powershell -ExecutionPolicy Bypass -NoProfile -Command "${fix.ps.replace(/"/g, '\\"')}"`,
-      { timeout: 30000, windowsHide: true, encoding: 'utf8' }
-    );
+    const { execFile: execF } = require('child_process');
+    const encoded = Buffer.from(fix.ps, 'utf16le').toString('base64');
+    await new Promise<string>((resolve, reject) => {
+      execF('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded],
+        { timeout: 60000, windowsHide: true, encoding: 'utf8', maxBuffer: 5 * 1024 * 1024 },
+        (err: any, stdout: string, stderr: string) => {
+          if (err) {
+            const msg = stderr?.trim() || err?.message || 'Fix command failed';
+            reject(new Error(msg));
+          } else { resolve(stdout); }
+        });
+    });
   } catch (err: any) {
     return { success: false, error: err?.message || 'Fix command failed', label: fix.label, checkId };
   }
@@ -2158,10 +2275,11 @@ ipcMain.handle('sentinel-fim-set-config', async (_event, update: any) => {
 ipcMain.handle('shield-enable-firewall-rule', async (_event, ruleName: string, enable: boolean) => {
   if (!isAdmin) return { success: false, message: 'Admin privileges required' };
   try {
-    const escaped = (ruleName || '').replace(/"/g, '\\"');
+    const safeName = sanitizeShellArg(ruleName);
+    if (!safeName) return { success: false, message: 'Invalid rule name' };
     const action = enable ? 'yes' : 'no';
-    execSync(`netsh advfirewall firewall set rule name="${escaped}" new enable=${action}`, { windowsHide: true, timeout: 10000 });
-    return { success: true, message: `Rule "${ruleName}" ${enable ? 'enabled' : 'disabled'}` };
+    await execPromise(`netsh advfirewall firewall set rule name="${safeName}" new enable=${action}`, { windowsHide: true, timeout: 10000 });
+    return { success: true, message: `Rule "${safeName}" ${enable ? 'enabled' : 'disabled'}` };
   } catch (error: any) {
     return { success: false, message: error.message || 'Failed to toggle rule' };
   }
@@ -2180,14 +2298,23 @@ ipcMain.handle('shield-add-firewall-rule', async (_event, ruleName: string, prot
 ipcMain.handle('shield-update-firewall-rule', async (_event, ruleName: string, options: any) => {
   if (!isAdmin) return { success: false, message: 'Admin privileges required' };
   try {
-    const escaped = (ruleName || '').replace(/"/g, '\\"');
+    const safeName = sanitizeShellArg(ruleName);
+    if (!safeName) return { success: false, message: 'Invalid rule name' };
     let setClause = '';
-    if (options?.localPort) setClause += ` localport=${options.localPort}`;
-    if (options?.action) setClause += ` action=${options.action}`;
+    if (options?.localPort) {
+      const safePort = sanitizeShellInt(options.localPort, 1, 65535);
+      if (safePort === null) return { success: false, message: 'Invalid port number' };
+      setClause += ` localport=${safePort}`;
+    }
+    if (options?.action) {
+      const VALID_ACTIONS = new Set(['allow', 'block'] as const);
+      const safeAction = sanitizeShellEnum(String(options.action).toLowerCase(), VALID_ACTIONS, 'block');
+      setClause += ` action=${safeAction}`;
+    }
     if (options?.enable !== undefined) setClause += ` enable=${options.enable ? 'yes' : 'no'}`;
     if (!setClause.trim()) return { success: false, message: 'No update options provided' };
-    execSync(`netsh advfirewall firewall set rule name="${escaped}" new${setClause}`, { windowsHide: true, timeout: 10000 });
-    return { success: true, message: `Rule "${ruleName}" updated` };
+    await execPromise(`netsh advfirewall firewall set rule name="${safeName}" new${setClause}`, { windowsHide: true, timeout: 10000 });
+    return { success: true, message: `Rule "${safeName}" updated` };
   } catch (error: any) {
     return { success: false, message: error.message };
   }
@@ -2205,13 +2332,18 @@ ipcMain.handle('shield-scan-ports', async () => {
 ipcMain.handle('shield-unblock-port', async (_event, port: number, protocol?: 'TCP' | 'UDP' | 'Any') => {
   if (!isAdmin) return { success: false, message: 'Admin privileges required' };
   try {
-    const proto = protocol || 'Any';
+    const portNum = Math.floor(Number(port));
+    if (!Number.isInteger(portNum) || portNum < 1 || portNum > 65535) {
+      return { success: false, message: 'Invalid port number' };
+    }
+    const VALID_PROTOCOLS = new Set(['TCP', 'UDP', 'Any']);
+    const proto = VALID_PROTOCOLS.has(protocol || '') ? protocol! : 'Any';
     const results: any[] = [];
     const dirs = ['in', 'out'];
     for (const dir of dirs) {
-      const name = `Sentinel Block Port ${port} ${proto} ${dir === 'in' ? 'IN' : 'OUT'}`;
+      const name = `Sentinel Block Port ${portNum} ${proto} ${dir === 'in' ? 'IN' : 'OUT'}`;
       try {
-        execSync(`netsh advfirewall firewall delete rule name="${name}"`, { windowsHide: true, timeout: 10000 });
+        await execPromise(`netsh advfirewall firewall delete rule name="${name}"`, { windowsHide: true, timeout: 10000 });
         results.push({ direction: dir, success: true });
       } catch {
         results.push({ direction: dir, success: false });
@@ -2444,9 +2576,9 @@ ipcMain.handle('sentinel-quick-block-subnet', async (_event, subnet: string, rea
 
 ipcMain.handle('sentinel-vpn-get-adapter-info', async () => {
   try {
-    const { getVpnStatus } = await import('./services/vpnDetector');
-    const status = getVpnStatus();
-    return { success: true, adapters: status.adapters, active: status.active, provider: status.provider };
+    const { getVpnStatus } = await import('./services/network/vpnDetector');
+    const status = await getVpnStatus();
+    return { success: true, adapter: status.adapter, active: status.active, provider: status.provider, tunnelIP: status.tunnelIP, protocol: status.protocol };
   } catch (error: any) {
     return { success: false, error: error.message, adapters: [], active: false };
   }
@@ -2493,12 +2625,13 @@ ipcMain.handle('ghost-set-dns', async (_event, primary: string, secondary: strin
     return { success: false, message: 'Admin privileges required. Run Sentinel as Administrator.' };
   }
 
-  // Validate IP format
-  const ipRegex = /^(\d{1,3}\.){3}\d{1,3}$/;
-  if (!ipRegex.test(primary)) {
+  // Strict IP validation before shell interpolation
+  const safePrimary = validateIPForShell(primary);
+  if (!safePrimary) {
     return { success: false, message: `Invalid primary DNS: ${primary}` };
   }
-  if (secondary && !ipRegex.test(secondary)) {
+  const safeSecondary = secondary ? validateIPForShell(secondary) : '';
+  if (secondary && !safeSecondary) {
     return { success: false, message: `Invalid secondary DNS: ${secondary}` };
   }
 
@@ -2545,13 +2678,15 @@ ipcMain.handle('ghost-set-dns', async (_event, primary: string, secondary: strin
       fs.writeFileSync(backupPath, JSON.stringify(_dnsBackup, null, 2), 'utf8');
     } catch { /* non-fatal */ }
 
-    // Set new DNS
-    const servers = secondary
-      ? `('${primary}','${secondary}')`
-      : `('${primary}')`;
+    // Set new DNS (validated IPs only)
+    const safeAdapter = sanitizeShellArg(adapterName.trim());
+    if (!safeAdapter) return { success: false, message: 'Invalid adapter name' };
+    const servers = safeSecondary
+      ? `('${safePrimary}','${safeSecondary}')`
+      : `('${safePrimary}')`;
 
     const setCmd = `powershell -ExecutionPolicy Bypass -NoProfile -Command "` +
-      `Set-DnsClientServerAddress -InterfaceAlias '${adapterName.trim()}' -ServerAddresses ${servers}"`;
+      `Set-DnsClientServerAddress -InterfaceAlias '${safeAdapter}' -ServerAddresses ${servers}"`;
 
     await execPromise(setCmd, opts);
 
@@ -2575,13 +2710,17 @@ ipcMain.handle('ghost-set-dns', async (_event, primary: string, secondary: strin
     if (!internetOk && _dnsBackup) {
       // AUTO-ROLLBACK: internet broken after DNS change
       try {
+        const rollbackAdapter = sanitizeShellArg(_dnsBackup.adapter);
+        if (!rollbackAdapter) throw new Error('Invalid rollback adapter name');
         if (_dnsBackup.servers.length === 0) {
-          await execPromise(`powershell -ExecutionPolicy Bypass -NoProfile -Command "Set-DnsClientServerAddress -InterfaceAlias '${_dnsBackup.adapter}' -ResetServerAddresses"`, opts);
+          await execPromise(`powershell -ExecutionPolicy Bypass -NoProfile -Command "Set-DnsClientServerAddress -InterfaceAlias '${rollbackAdapter}' -ResetServerAddresses"`, opts);
         } else {
-          const rollbackServers = _dnsBackup.servers.map((s: string) => `'${s}'`).join(',');
-          await execPromise(`powershell -ExecutionPolicy Bypass -NoProfile -Command "Set-DnsClientServerAddress -InterfaceAlias '${_dnsBackup.adapter}' -ServerAddresses (${rollbackServers})"`, opts);
+          const safeServers = _dnsBackup.servers.filter((s: string) => validateIPForShell(s));
+          if (safeServers.length === 0) throw new Error('No valid rollback DNS servers');
+          const rollbackServers = safeServers.map((s: string) => `'${s}'`).join(',');
+          await execPromise(`powershell -ExecutionPolicy Bypass -NoProfile -Command "Set-DnsClientServerAddress -InterfaceAlias '${rollbackAdapter}' -ServerAddresses (${rollbackServers})"`, opts);
         }
-        try { await execPromise('ipconfig /flushdns', opts); } catch { /* */ }
+        try { await execPromise('ipconfig /flushdns', opts); } catch (e: any) { console.warn('[DNS] flushdns failed during rollback:', e?.message); }
       } catch { /* rollback failed */ }
 
       addActivityLog('DNS', 'Set DNS', `DNS change to ${primary} FAILED internet test — AUTO-ROLLED BACK`, 'error');
@@ -2616,7 +2755,7 @@ ipcMain.handle('ghost-rollback-dns', async () => {
       if (fs.existsSync(backupPath)) {
         _dnsBackup = JSON.parse(fs.readFileSync(backupPath, 'utf8'));
       }
-    } catch { /* */ }
+    } catch (e: any) { console.warn('[DNS] Failed to load backup from disk:', e?.message); }
   }
   if (!_dnsBackup) {
     return { success: false, message: 'No DNS backup available to rollback' };
@@ -2626,21 +2765,26 @@ ipcMain.handle('ghost-rollback-dns', async () => {
     const { getExecOptions } = await import('./services/execOptions');
     const opts = getExecOptions();
 
+    const safeRollbackAdapter = sanitizeShellArg(String(_dnsBackup.adapter || ''));
+    if (!safeRollbackAdapter) return { success: false, message: 'Invalid adapter name in DNS backup' };
+
     if (_dnsBackup.servers.length === 0) {
       // Restore to DHCP
       const cmd = `powershell -ExecutionPolicy Bypass -NoProfile -Command "` +
-        `Set-DnsClientServerAddress -InterfaceAlias '${_dnsBackup.adapter}' -ResetServerAddresses"`;
+        `Set-DnsClientServerAddress -InterfaceAlias '${safeRollbackAdapter}' -ResetServerAddresses"`;
       await execPromise(cmd, opts);
     } else {
-      const servers = _dnsBackup.servers.map((s) => `'${s}'`).join(',');
+      const safeServers = _dnsBackup.servers.filter((s: string) => validateIPForShell(s));
+      if (safeServers.length === 0) return { success: false, message: 'No valid DNS servers in backup' };
+      const servers = safeServers.map((s: string) => `'${s}'`).join(',');
       const cmd = `powershell -ExecutionPolicy Bypass -NoProfile -Command "` +
-        `Set-DnsClientServerAddress -InterfaceAlias '${_dnsBackup.adapter}' -ServerAddresses (${servers})"`;
+        `Set-DnsClientServerAddress -InterfaceAlias '${safeRollbackAdapter}' -ServerAddresses (${servers})"`;
       await execPromise(cmd, opts);
     }
 
     try { await execPromise('ipconfig /flushdns', opts); } catch { /* non-fatal */ }
 
-    addActivityLog('DNS', 'Rollback DNS', `DNS restored to ${_dnsBackup.servers.join(', ') || 'DHCP'} on ${_dnsBackup.adapter}`, 'success');
+    addActivityLog('DNS', 'Rollback DNS', `DNS restored to ${_dnsBackup.servers.join(', ') || 'DHCP'} on ${safeRollbackAdapter}`, 'success');
 
     const result = { success: true, message: `DNS rolled back to ${_dnsBackup.servers.join(', ') || 'DHCP'}` };
     _dnsBackup = null;
@@ -2652,11 +2796,14 @@ ipcMain.handle('ghost-rollback-dns', async () => {
 
 ipcMain.handle('ghost-test-dns-speed', async (_event, dnsServer: string) => {
   try {
+    const safeDns = validateIPForShell(dnsServer);
+    if (!safeDns) return { success: false, latency: -1 };
+
     const { getExecOptions } = await import('./services/execOptions');
     const opts = getExecOptions();
 
     const pingCmd = `powershell -ExecutionPolicy Bypass -NoProfile -Command "` +
-      `$r = Test-Connection -ComputerName '${dnsServer}' -Count 2 -BufferSize 32 -ErrorAction SilentlyContinue; ` +
+      `$r = Test-Connection -ComputerName '${safeDns}' -Count 2 -BufferSize 32 -ErrorAction SilentlyContinue; ` +
       `if ($r) { [math]::Round(($r | Measure-Object -Property ResponseTime -Average).Average, 1) } else { -1 }"`;
 
     const { stdout } = await execPromise(pingCmd, opts);
@@ -2684,7 +2831,27 @@ ipcMain.handle('ghost-save-hosts-file', async (_event, content: string) => {
     return { success: false, error: 'Admin privileges required' };
   }
   try {
+    if (typeof content !== 'string') return { success: false, error: 'Content must be a string' };
+    if (content.length > 512 * 1024) return { success: false, error: 'Hosts file content exceeds 512KB limit' };
+
+    // Validate each non-empty, non-comment line matches hosts file format
+    const lines = content.split('\n');
+    const HOSTS_LINE = /^\s*(?:#.*|(?:\d{1,3}\.){3}\d{1,3}\s+[a-zA-Z0-9][a-zA-Z0-9.\-]*[a-zA-Z0-9](?:\s+#.*)?)?\s*$/;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].replace(/\r$/, '');
+      if (line.trim() === '' || line.trim().startsWith('#')) continue;
+      if (!HOSTS_LINE.test(line)) {
+        return { success: false, error: `Invalid hosts entry at line ${i + 1}: ${line.slice(0, 80)}` };
+      }
+    }
+
     const hostsPath = 'C:\\Windows\\System32\\drivers\\etc\\hosts';
+    // Create backup before overwriting
+    try {
+      const backup = fs.readFileSync(hostsPath, 'utf8');
+      fs.writeFileSync(hostsPath + '.sentinel-backup', backup, 'utf8');
+    } catch { /* backup is best-effort */ }
+
     fs.writeFileSync(hostsPath, content, 'utf8');
     return { success: true, message: 'Hosts file saved' };
   } catch (error: any) {
@@ -2734,54 +2901,24 @@ ipcMain.handle('forge-clear-standby-cache', async () => {
 // Startup Programs — Registry + WMI + Scheduled Tasks + Risk assessment
 ipcMain.handle('forge-get-startup-items', async () => {
   try {
-    const { spawnSync } = require('child_process');
-    const psScript = `
-$ErrorActionPreference = 'SilentlyContinue'
-$all = @()
-
-# 1. Win32_StartupCommand (WMI)
-Get-CimInstance Win32_StartupCommand | ForEach-Object {
-  $all += [PSCustomObject]@{ name=$_.Name; command=$_.Command; location=$_.Location; user=$_.User; source='WMI' }
-}
-
-# 2. Registry HKLM Run
-$hklm = 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run'
-if (Test-Path $hklm) {
-  (Get-ItemProperty $hklm).PSObject.Properties | Where-Object { $_.Name -notmatch '^PS' } | ForEach-Object {
-    $all += [PSCustomObject]@{ name=$_.Name; command=$_.Value; location=$hklm; user='AllUsers'; source='Registry-HKLM' }
-  }
-}
-
-# 3. Registry HKCU Run
-$hkcu = 'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run'
-if (Test-Path $hkcu) {
-  (Get-ItemProperty $hkcu).PSObject.Properties | Where-Object { $_.Name -notmatch '^PS' } | ForEach-Object {
-    $all += [PSCustomObject]@{ name=$_.Name; command=$_.Value; location=$hkcu; user=$env:USERNAME; source='Registry-HKCU' }
-  }
-}
-
-# 4. Scheduled Tasks (Ready state only)
-Get-ScheduledTask | Where-Object { $_.State -eq 'Ready' -and $_.Actions.Count -gt 0 } | Select-Object -First 50 | ForEach-Object {
-  $act = $_.Actions[0]
-  $cmd = if($act.Execute){$act.Execute + ' ' + $act.Arguments}else{''}
-  $all += [PSCustomObject]@{ name=$_.TaskName; command=$cmd.Trim(); location=$_.TaskPath; user=$_.Principal.UserId; source='ScheduledTask' }
-}
-
-# Boot time
-$boot = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
-$uptime = [math]::Round(((Get-Date) - $boot).TotalSeconds)
-
-# Deduplicate by name
-$unique = $all | Sort-Object name -Unique
-
-@{ items = $unique; bootSeconds = $uptime } | ConvertTo-Json -Depth 3 -Compress
-`;
-    const result = spawnSync('powershell.exe',
-      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', '-'],
-      { input: psScript, timeout: 20000, windowsHide: true, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 }
-    );
-    if (result.error) throw result.error;
-    const output = (result.stdout || '').trim();
+    const { execFile: execF } = require('child_process');
+    const psScript = `$ErrorActionPreference='SilentlyContinue'
+$all=@()
+Get-CimInstance Win32_StartupCommand|ForEach-Object{$all+=[PSCustomObject]@{name=$_.Name;command=$_.Command;location=$_.Location;user=$_.User;source='WMI'}}
+$hklm='HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run'
+if(Test-Path $hklm){(Get-ItemProperty $hklm).PSObject.Properties|Where-Object{$_.Name -notmatch '^PS'}|ForEach-Object{$all+=[PSCustomObject]@{name=$_.Name;command=$_.Value;location=$hklm;user='AllUsers';source='Registry-HKLM'}}}
+$hkcu='HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run'
+if(Test-Path $hkcu){(Get-ItemProperty $hkcu).PSObject.Properties|Where-Object{$_.Name -notmatch '^PS'}|ForEach-Object{$all+=[PSCustomObject]@{name=$_.Name;command=$_.Value;location=$hkcu;user=$env:USERNAME;source='Registry-HKCU'}}}
+Get-ScheduledTask|Where-Object{$_.State -eq 'Ready' -and $_.Actions.Count -gt 0}|Select-Object -First 50|ForEach-Object{$act=$_.Actions[0];$cmd=if($act.Execute){$act.Execute+' '+$act.Arguments}else{''};$all+=[PSCustomObject]@{name=$_.TaskName;command=$cmd.Trim();location=$_.TaskPath;user=$_.Principal.UserId;source='ScheduledTask'}}
+$boot=(Get-CimInstance Win32_OperatingSystem).LastBootUpTime;$uptime=[math]::Round(((Get-Date)-$boot).TotalSeconds)
+$unique=$all|Sort-Object name -Unique
+@{items=$unique;bootSeconds=$uptime}|ConvertTo-Json -Depth 3 -Compress`;
+    const encoded = Buffer.from(psScript, 'utf16le').toString('base64');
+    const output = await new Promise<string>((resolve, reject) => {
+      execF('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded],
+        { timeout: 20000, windowsHide: true, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 },
+        (err: any, stdout: string) => err ? reject(err) : resolve((stdout || '').trim()));
+    });
     if (!output) return { success: true, items: [], currentBootTime: -1 };
 
     const parsed = JSON.parse(output);
@@ -2818,27 +2955,16 @@ $unique = $all | Sort-Object name -Unique
 // Services — real enumeration via PowerShell + WMI PathName
 ipcMain.handle('forge-get-windows-services', async () => {
   try {
-    const { spawnSync } = require('child_process');
-    const psScript = `
-$ErrorActionPreference = 'SilentlyContinue'
-$wmiMap = @{}
-Get-CimInstance Win32_Service | ForEach-Object { $wmiMap[$_.Name] = $_.PathName }
-Get-Service | ForEach-Object {
-  [PSCustomObject]@{
-    name = $_.Name
-    displayName = $_.DisplayName
-    status = $_.Status.ToString()
-    startType = $_.StartType.ToString()
-    path = if($wmiMap.ContainsKey($_.Name)){$wmiMap[$_.Name]}else{''}
-  }
-} | ConvertTo-Json -Depth 2 -Compress
-`;
-    const result = spawnSync('powershell.exe',
-      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', '-'],
-      { input: psScript, timeout: 25000, windowsHide: true, encoding: 'utf8', maxBuffer: 20 * 1024 * 1024 }
-    );
-    if (result.error) throw result.error;
-    const output = (result.stdout || '').trim();
+    const { execFile: execF } = require('child_process');
+    const psScript = `$ErrorActionPreference='SilentlyContinue'
+$wmiMap=@{};Get-CimInstance Win32_Service|ForEach-Object{$wmiMap[$_.Name]=$_.PathName}
+Get-Service|ForEach-Object{[PSCustomObject]@{name=$_.Name;displayName=$_.DisplayName;status=$_.Status.ToString();startType=$_.StartType.ToString();path=if($wmiMap.ContainsKey($_.Name)){$wmiMap[$_.Name]}else{''}}}|ConvertTo-Json -Depth 2 -Compress`;
+    const encoded = Buffer.from(psScript, 'utf16le').toString('base64');
+    const output = await new Promise<string>((resolve, reject) => {
+      execF('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded],
+        { timeout: 25000, windowsHide: true, encoding: 'utf8', maxBuffer: 20 * 1024 * 1024 },
+        (err: any, stdout: string) => err ? reject(err) : resolve((stdout || '').trim()));
+    });
     if (!output) return { success: true, services: [] };
     let services = JSON.parse(output);
     if (!Array.isArray(services)) services = services ? [services] : [];
@@ -2866,29 +2992,31 @@ ipcMain.handle('forge-control-service', async (_event, serviceName: string, acti
     return { success: false, message: 'Missing service name or action' };
   }
   try {
-    const escaped = serviceName.replace(/'/g, "''");
+    const safeName = sanitizeShellArg(serviceName);
+    if (!safeName || safeName.length > 256) return { success: false, message: 'Invalid service name' };
+    const VALID_ACTIONS = new Set(['start', 'stop', 'disable', 'enable'] as const);
+    if (!VALID_ACTIONS.has(action)) return { success: false, message: `Unknown action: ${action}` };
+
     let psCmd = '';
     switch (action) {
       case 'start':
-        psCmd = `Start-Service -Name '${escaped}' -ErrorAction Stop`;
+        psCmd = `Start-Service -Name '${safeName}' -ErrorAction Stop`;
         break;
       case 'stop':
-        psCmd = `Stop-Service -Name '${escaped}' -Force -ErrorAction Stop`;
+        psCmd = `Stop-Service -Name '${safeName}' -Force -ErrorAction Stop`;
         break;
       case 'disable':
-        psCmd = `Set-Service -Name '${escaped}' -StartupType Disabled -ErrorAction Stop; Stop-Service -Name '${escaped}' -Force -ErrorAction SilentlyContinue`;
+        psCmd = `Set-Service -Name '${safeName}' -StartupType Disabled -ErrorAction Stop; Stop-Service -Name '${safeName}' -Force -ErrorAction SilentlyContinue`;
         break;
       case 'enable':
-        psCmd = `Set-Service -Name '${escaped}' -StartupType Automatic -ErrorAction Stop`;
+        psCmd = `Set-Service -Name '${safeName}' -StartupType Automatic -ErrorAction Stop`;
         break;
-      default:
-        return { success: false, message: `Unknown action: ${action}` };
     }
     const { getExecOptions } = await import('./services/execOptions');
     const opts = getExecOptions();
     await execPromise(`powershell -NoProfile -ExecutionPolicy Bypass -Command "${psCmd}"`, opts);
-    addActivityLog('Forge', 'Service Control', `${action} service: ${serviceName}`, 'success');
-    return { success: true, message: `Service ${serviceName} — ${action} successful` };
+    addActivityLog('Forge', 'Service Control', `${action} service: ${safeName}`, 'success');
+    return { success: true, message: `Service ${safeName} — ${action} successful` };
   } catch (error: any) {
     return { success: false, message: error.message || `Failed to ${action} service` };
   }
@@ -3017,25 +3145,15 @@ ipcMain.handle('vault-get-encrypted-files', async () => {
 // === EVENT LOG ANALYZER ===
 ipcMain.handle('sentinel-eventlog-get-security', async () => {
   try {
-    const { spawnSync } = require('child_process');
-    const psScript = `
-$ErrorActionPreference = 'SilentlyContinue'
-Get-WinEvent -LogName Security -MaxEvents 200 | ForEach-Object {
-  [PSCustomObject]@{
-    id = $_.Id
-    timeCreated = $_.TimeCreated.ToString('o')
-    level = $_.LevelDisplayName
-    message = ($_.Message -split '\\n')[0]
-    provider = $_.ProviderName
-  }
-} | ConvertTo-Json -Depth 2 -Compress
-`;
-    const result = spawnSync('powershell.exe',
-      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', '-'],
-      { input: psScript, timeout: 15000, windowsHide: true, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 }
-    );
-    if (result.error) throw result.error;
-    const output = (result.stdout || '').trim();
+    const { execFile: execF } = require('child_process');
+    const psScript = `$ErrorActionPreference='SilentlyContinue'
+Get-WinEvent -LogName Security -MaxEvents 200|ForEach-Object{[PSCustomObject]@{id=$_.Id;timeCreated=$_.TimeCreated.ToString('o');level=$_.LevelDisplayName;message=($_.Message -split '\n')[0];provider=$_.ProviderName}}|ConvertTo-Json -Depth 2 -Compress`;
+    const encoded = Buffer.from(psScript, 'utf16le').toString('base64');
+    const output = await new Promise<string>((resolve, reject) => {
+      execF('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded],
+        { timeout: 15000, windowsHide: true, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 },
+        (err: any, stdout: string) => err ? reject(err) : resolve((stdout || '').trim()));
+    });
     if (!output) return { success: true, events: [] };
     let events = JSON.parse(output);
     if (!Array.isArray(events)) events = events ? [events] : [];
@@ -3047,44 +3165,19 @@ Get-WinEvent -LogName Security -MaxEvents 200 | ForEach-Object {
 
 ipcMain.handle('sentinel-eventlog-get-alerts', async () => {
   try {
-    const { spawnSync } = require('child_process');
-    // Filter for suspicious events: failed logins, privilege escalation, service installs, process creation
-    const psScript = `
-$ErrorActionPreference = 'SilentlyContinue'
-$suspiciousIds = @(4625, 4672, 4688, 7045, 4720, 4732, 1102)
-$events = Get-WinEvent -LogName Security -MaxEvents 5000 | Where-Object { $suspiciousIds -contains $_.Id } | Select-Object -First 100 | ForEach-Object {
-  $risk = 'medium'
-  if ($_.Id -eq 4625) { $risk = 'high' }
-  if ($_.Id -eq 7045) { $risk = 'high' }
-  if ($_.Id -eq 1102) { $risk = 'critical' }
-  if ($_.Id -eq 4672) { $risk = 'medium' }
-  [PSCustomObject]@{
-    id = $_.Id
-    timeCreated = $_.TimeCreated.ToString('o')
-    level = $_.LevelDisplayName
-    message = ($_.Message -split '\\n')[0]
-    provider = $_.ProviderName
-    risk = $risk
-    eventType = switch($_.Id) {
-      4625 { 'Failed Login' }
-      4672 { 'Privilege Escalation' }
-      4688 { 'Process Created' }
-      7045 { 'Service Installed' }
-      4720 { 'Account Created' }
-      4732 { 'Group Membership Changed' }
-      1102 { 'Audit Log Cleared' }
-      default { 'Suspicious' }
-    }
-  }
-}
-$events | ConvertTo-Json -Depth 2 -Compress
-`;
-    const result = spawnSync('powershell.exe',
-      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', '-'],
-      { input: psScript, timeout: 20000, windowsHide: true, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 }
-    );
-    if (result.error) throw result.error;
-    const output = (result.stdout || '').trim();
+    const { execFile: execF } = require('child_process');
+    const psScript = `$ErrorActionPreference='SilentlyContinue'
+$suspiciousIds=@(4625,4672,4688,7045,4720,4732,1102)
+$events=Get-WinEvent -LogName Security -MaxEvents 5000|Where-Object{$suspiciousIds -contains $_.Id}|Select-Object -First 100|ForEach-Object{
+  $risk='medium';if($_.Id -eq 4625){$risk='high'};if($_.Id -eq 7045){$risk='high'};if($_.Id -eq 1102){$risk='critical'};if($_.Id -eq 4672){$risk='medium'}
+  [PSCustomObject]@{id=$_.Id;timeCreated=$_.TimeCreated.ToString('o');level=$_.LevelDisplayName;message=($_.Message -split '\n')[0];provider=$_.ProviderName;risk=$risk;eventType=switch($_.Id){4625{'Failed Login'}4672{'Privilege Escalation'}4688{'Process Created'}7045{'Service Installed'}4720{'Account Created'}4732{'Group Membership Changed'}1102{'Audit Log Cleared'}default{'Suspicious'}}}}
+$events|ConvertTo-Json -Depth 2 -Compress`;
+    const encoded = Buffer.from(psScript, 'utf16le').toString('base64');
+    const output = await new Promise<string>((resolve, reject) => {
+      execF('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded],
+        { timeout: 20000, windowsHide: true, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 },
+        (err: any, stdout: string) => err ? reject(err) : resolve((stdout || '').trim()));
+    });
     if (!output) return { success: true, alerts: [] };
     let alerts = JSON.parse(output);
     if (!Array.isArray(alerts)) alerts = alerts ? [alerts] : [];
@@ -3097,97 +3190,26 @@ $events | ConvertTo-Json -Depth 2 -Compress
 // === SYSTEM HARDENING SCORE ===
 ipcMain.handle('sentinel-hardening-get-score', async () => {
   try {
-    const { spawnSync } = require('child_process');
-    const psScript = `
-$ErrorActionPreference = 'SilentlyContinue'
-$checks = @()
-$passed = 0
-$total = 0
-
-# 1. Firewall active (all profiles)
-$total++
-$fw = Get-NetFirewallProfile | Where-Object { $_.Enabled -eq $true }
-$fwOk = ($fw.Count -ge 3)
-if ($fwOk) { $passed++ }
-$checks += [PSCustomObject]@{ name='Firewall Active (All Profiles)'; passed=$fwOk; category='Network' }
-
-# 2. Windows Defender active
-$total++
-$def = Get-MpComputerStatus -ErrorAction SilentlyContinue
-$defOk = ($def.AntivirusEnabled -eq $true)
-if ($defOk) { $passed++ }
-$checks += [PSCustomObject]@{ name='Windows Defender Active'; passed=$defOk; category='Antivirus' }
-
-# 3. Defender real-time protection
-$total++
-$rtOk = ($def.RealTimeProtectionEnabled -eq $true)
-if ($rtOk) { $passed++ }
-$checks += [PSCustomObject]@{ name='Real-Time Protection'; passed=$rtOk; category='Antivirus' }
-
-# 4. UAC enabled
-$total++
-$uac = (Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System' -ErrorAction SilentlyContinue).EnableLUA
-$uacOk = ($uac -eq 1)
-if ($uacOk) { $passed++ }
-$checks += [PSCustomObject]@{ name='UAC Enabled'; passed=$uacOk; category='System' }
-
-# 5. Auto-Updates
-$total++
-$au = (Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\Auto Update' -ErrorAction SilentlyContinue).AUOptions
-$auOk = ($au -ge 3)
-if ($auOk) { $passed++ }
-$checks += [PSCustomObject]@{ name='Auto-Updates Enabled'; passed=$auOk; category='Updates' }
-
-# 6. Remote Desktop disabled
-$total++
-$rdp = (Get-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server' -ErrorAction SilentlyContinue).fDenyTSConnections
-$rdpOk = ($rdp -eq 1)
-if ($rdpOk) { $passed++ }
-$checks += [PSCustomObject]@{ name='Remote Desktop Disabled'; passed=$rdpOk; category='Network' }
-
-# 7. SMBv1 disabled
-$total++
-$smb1 = (Get-SmbServerConfiguration -ErrorAction SilentlyContinue).EnableSMB1Protocol
-$smb1Ok = ($smb1 -eq $false)
-if ($smb1Ok) { $passed++ }
-$checks += [PSCustomObject]@{ name='SMBv1 Disabled'; passed=$smb1Ok; category='Network' }
-
-# 8. Guest account disabled
-$total++
-$guest = Get-LocalUser -Name 'Guest' -ErrorAction SilentlyContinue
-$guestOk = ($guest.Enabled -eq $false)
-if ($guestOk) { $passed++ }
-$checks += [PSCustomObject]@{ name='Guest Account Disabled'; passed=$guestOk; category='Accounts' }
-
-# 9. BitLocker (check C: drive)
-$total++
-$bl = Get-BitLockerVolume -MountPoint 'C:' -ErrorAction SilentlyContinue
-$blOk = ($bl.ProtectionStatus -eq 'On')
-if ($blOk) { $passed++ }
-$checks += [PSCustomObject]@{ name='BitLocker Active (C:)'; passed=$blOk; category='Encryption' }
-
-# 10. Secure Boot
-$total++
-$sb = Confirm-SecureBootUEFI -ErrorAction SilentlyContinue
-$sbOk = ($sb -eq $true)
-if ($sbOk) { $passed++ }
-$checks += [PSCustomObject]@{ name='Secure Boot Enabled'; passed=$sbOk; category='Boot' }
-
-$score = if($total -gt 0){[math]::Round(($passed / $total) * 100)}else{0}
-
-[PSCustomObject]@{
-  score = $score
-  passed = $passed
-  total = $total
-  checks = $checks
-} | ConvertTo-Json -Depth 3 -Compress
-`;
-    const result = spawnSync('powershell.exe',
-      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', '-'],
-      { input: psScript, timeout: 20000, windowsHide: true, encoding: 'utf8', maxBuffer: 5 * 1024 * 1024 }
-    );
-    if (result.error) throw result.error;
-    const output = (result.stdout || '').trim();
+    const { execFile: execF } = require('child_process');
+    const psScript = `$ErrorActionPreference='SilentlyContinue';$checks=@();$passed=0;$total=0
+$total++;$fw=Get-NetFirewallProfile|Where-Object{$_.Enabled -eq $true};$fwOk=($fw.Count -ge 3);if($fwOk){$passed++};$checks+=[PSCustomObject]@{name='Firewall Active (All Profiles)';passed=$fwOk;category='Network'}
+$total++;$def=Get-MpComputerStatus -EA SilentlyContinue;$defOk=($def.AntivirusEnabled -eq $true);if($defOk){$passed++};$checks+=[PSCustomObject]@{name='Windows Defender Active';passed=$defOk;category='Antivirus'}
+$total++;$rtOk=($def.RealTimeProtectionEnabled -eq $true);if($rtOk){$passed++};$checks+=[PSCustomObject]@{name='Real-Time Protection';passed=$rtOk;category='Antivirus'}
+$total++;$uac=(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -EA SilentlyContinue).EnableLUA;$uacOk=($uac -eq 1);if($uacOk){$passed++};$checks+=[PSCustomObject]@{name='UAC Enabled';passed=$uacOk;category='System'}
+$total++;$au=(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update' -EA SilentlyContinue).AUOptions;$auOk=($au -ge 3);if($auOk){$passed++};$checks+=[PSCustomObject]@{name='Auto-Updates Enabled';passed=$auOk;category='Updates'}
+$total++;$rdp=(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -EA SilentlyContinue).fDenyTSConnections;$rdpOk=($rdp -eq 1);if($rdpOk){$passed++};$checks+=[PSCustomObject]@{name='Remote Desktop Disabled';passed=$rdpOk;category='Network'}
+$total++;$smb1=(Get-SmbServerConfiguration -EA SilentlyContinue).EnableSMB1Protocol;$smb1Ok=($smb1 -eq $false);if($smb1Ok){$passed++};$checks+=[PSCustomObject]@{name='SMBv1 Disabled';passed=$smb1Ok;category='Network'}
+$total++;$guest=Get-LocalUser -Name 'Guest' -EA SilentlyContinue;$guestOk=($guest.Enabled -eq $false);if($guestOk){$passed++};$checks+=[PSCustomObject]@{name='Guest Account Disabled';passed=$guestOk;category='Accounts'}
+$total++;$bl=Get-BitLockerVolume -MountPoint 'C:' -EA SilentlyContinue;$blOk=($bl.ProtectionStatus -eq 'On');if($blOk){$passed++};$checks+=[PSCustomObject]@{name='BitLocker Active (C:)';passed=$blOk;category='Encryption'}
+$total++;$sb=Confirm-SecureBootUEFI -EA SilentlyContinue;$sbOk=($sb -eq $true);if($sbOk){$passed++};$checks+=[PSCustomObject]@{name='Secure Boot Enabled';passed=$sbOk;category='Boot'}
+$score=if($total -gt 0){[math]::Round(($passed/$total)*100)}else{0}
+[PSCustomObject]@{score=$score;passed=$passed;total=$total;checks=$checks}|ConvertTo-Json -Depth 3 -Compress`;
+    const encoded = Buffer.from(psScript, 'utf16le').toString('base64');
+    const output = await new Promise<string>((resolve, reject) => {
+      execF('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded],
+        { timeout: 20000, windowsHide: true, encoding: 'utf8', maxBuffer: 5 * 1024 * 1024 },
+        (err: any, stdout: string) => err ? reject(err) : resolve((stdout || '').trim()));
+    });
     if (!output) return { success: true, score: 0, passed: 0, total: 0, checks: [] };
     const parsed = JSON.parse(output);
     let checks = parsed.checks;
@@ -3201,27 +3223,16 @@ $score = if($total -gt 0){[math]::Round(($passed / $total) * 100)}else{0}
 // === PORT SCANNER (own open ports) ===
 ipcMain.handle('sentinel-portscan-run', async () => {
   try {
-    const { spawnSync } = require('child_process');
-    const psScript = `
-$ErrorActionPreference = 'SilentlyContinue'
-$listening = Get-NetTCPConnection -State Listen | ForEach-Object {
-  $proc = Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue
-  [PSCustomObject]@{
-    port = $_.LocalPort
-    address = $_.LocalAddress
-    pid = $_.OwningProcess
-    process = if($proc){$proc.ProcessName}else{'Unknown'}
-    processPath = if($proc){$proc.Path}else{''}
-  }
-} | Sort-Object port -Unique
-$listening | ConvertTo-Json -Depth 2 -Compress
-`;
-    const result = spawnSync('powershell.exe',
-      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', '-'],
-      { input: psScript, timeout: 10000, windowsHide: true, encoding: 'utf8', maxBuffer: 5 * 1024 * 1024 }
-    );
-    if (result.error) throw result.error;
-    const output = (result.stdout || '').trim();
+    const { execFile: execF } = require('child_process');
+    const psScript = `$ErrorActionPreference='SilentlyContinue'
+$listening=Get-NetTCPConnection -State Listen|ForEach-Object{$proc=Get-Process -Id $_.OwningProcess -EA SilentlyContinue;[PSCustomObject]@{port=$_.LocalPort;address=$_.LocalAddress;pid=$_.OwningProcess;process=if($proc){$proc.ProcessName}else{'Unknown'};processPath=if($proc){$proc.Path}else{''}}}|Sort-Object port -Unique
+$listening|ConvertTo-Json -Depth 2 -Compress`;
+    const encoded = Buffer.from(psScript, 'utf16le').toString('base64');
+    const output = await new Promise<string>((resolve, reject) => {
+      execF('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded],
+        { timeout: 10000, windowsHide: true, encoding: 'utf8', maxBuffer: 5 * 1024 * 1024 },
+        (err: any, stdout: string) => err ? reject(err) : resolve((stdout || '').trim()));
+    });
     if (!output) return { success: true, ports: [] };
     let ports = JSON.parse(output);
     if (!Array.isArray(ports)) ports = ports ? [ports] : [];
@@ -3270,7 +3281,7 @@ ipcMain.handle('sentinel-timeline-get-events', async (_event, maxEvents?: number
           }
         }
       }
-    } catch { /* */ }
+    } catch (e: any) { console.warn('[Timeline] Activity log unavailable:', e?.message); }
 
     // 2. FIM changes
     try {
@@ -3286,7 +3297,7 @@ ipcMain.handle('sentinel-timeline-get-events', async (_event, maxEvents?: number
           severity: c.risk,
         });
       }
-    } catch { /* */ }
+    } catch (e: any) { console.warn('[Timeline] FIM data unavailable:', e?.message); }
 
     // 3. Security events
     try {
@@ -3306,7 +3317,7 @@ ipcMain.handle('sentinel-timeline-get-events', async (_event, maxEvents?: number
           }
         }
       }
-    } catch { /* */ }
+    } catch (e: any) { console.warn('[Timeline] Security events unavailable:', e?.message); }
 
     // Sort by timestamp descending, limit
     timeline.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
@@ -3399,13 +3410,13 @@ ipcMain.handle('renderer-build', async () => {
 		const build = spawn(cmd, ['run', 'build'], { cwd: process.cwd() });
 
 		build.stdout.on('data', (d) => {
-			try { mainWindow?.webContents.send('renderer-build-log', d.toString()); } catch {}
+			try { mainWindow?.webContents.send('renderer-build-log', d.toString()); } catch { /* window may be closed */ }
 		});
 		build.stderr.on('data', (d) => {
-			try { mainWindow?.webContents.send('renderer-build-log', d.toString()); } catch {}
+			try { mainWindow?.webContents.send('renderer-build-log', d.toString()); } catch { /* window may be closed */ }
 		});
 		build.on('close', (code) => {
-			try { mainWindow?.webContents.send('renderer-build-done', { success: code === 0, code }); } catch {}
+			try { mainWindow?.webContents.send('renderer-build-done', { success: code === 0, code }); } catch { /* window may be closed */ }
 		});
 
 		return { success: true, message: 'Build started' };
@@ -3538,7 +3549,7 @@ ipcMain.handle('shield-block-ip-subnet', async (_event, ip: string, subnetMask: 
     // Create Inbound rule
     try {
       const cmdIn = `netsh advfirewall firewall add rule name="${ruleName} IN" dir=in action=block remoteip=${subnet.split('/')[0]}/${subnetMask} enable=yes`;
-      execSync(cmdIn, { windowsHide: true });
+      await execPromise(cmdIn, { windowsHide: true, timeout: 10000 });
       addSentinelRule(`${ruleName} IN`);
     } catch (err: any) {
       console.error('Failed to create inbound rule:', err.message);
@@ -3548,7 +3559,7 @@ ipcMain.handle('shield-block-ip-subnet', async (_event, ip: string, subnetMask: 
     // Create Outbound rule
     try {
       const cmdOut = `netsh advfirewall firewall add rule name="${ruleName} OUT" dir=out action=block remoteip=${subnet.split('/')[0]}/${subnetMask} enable=yes`;
-      execSync(cmdOut, { windowsHide: true });
+      await execPromise(cmdOut, { windowsHide: true, timeout: 10000 });
       addSentinelRule(`${ruleName} OUT`);
     } catch (err: any) {
       console.error('Failed to create outbound rule:', err.message);
@@ -3610,7 +3621,7 @@ ipcMain.handle('firewall-export', async (_event, options: { format: 'txt' | 'csv
     const { aggregateFirewallRules } = await import('./ipc/shieldHandlers');
     const { exportFirewallRules } = await import('./services/firewall/firewallExporter');
 
-    const aggregation = aggregateFirewallRules();
+    const aggregation = await aggregateFirewallRules();
     const exportOpts = {
       format: options.format,
       filter: (options.filter || 'all') as 'all' | 'inbound' | 'outbound' | 'sentinel-only' | 'block-only',
@@ -4007,8 +4018,8 @@ ipcMain.handle('forge-optimize-ram', async () => {
   try {
     const freeBefore = os.freemem();
     const actions: string[] = [];
-    try { await execPromise('powershell -NoProfile -Command "[System.GC]::Collect()"', { windowsHide: true, timeout: 5000 }); actions.push('GC collected'); } catch { /* */ }
-    try { await execPromise('powershell -NoProfile -Command "Clear-RecycleBin -Force -ErrorAction SilentlyContinue"', { windowsHide: true, timeout: 5000 }); actions.push('Recycle bin cleared'); } catch { /* */ }
+    try { await execPromise('powershell -NoProfile -Command "[System.GC]::Collect()"', { windowsHide: true, timeout: 5000 }); actions.push('GC collected'); } catch (e: any) { console.warn('[RAM] GC collect failed:', e?.message); }
+    try { await execPromise('powershell -NoProfile -Command "Clear-RecycleBin -Force -ErrorAction SilentlyContinue"', { windowsHide: true, timeout: 5000 }); actions.push('Recycle bin cleared'); } catch (e: any) { console.warn('[RAM] RecycleBin clear failed:', e?.message); }
     const freeAfter = os.freemem();
     const freedMB = Math.max(0, Math.round((freeAfter - freeBefore) / (1024 * 1024)));
     return { success: true, freedMB, actions, message: `RAM optimized, freed ~${freedMB} MB` };
@@ -4019,13 +4030,15 @@ ipcMain.handle('forge-optimize-ram', async () => {
 
 ipcMain.handle('forge-get-top-cpu-processes', async () => {
   try {
-    const { spawnSync } = require('child_process');
-    const result = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', '-'], {
-      input: 'Get-Process | Sort-Object CPU -Descending | Select-Object -First 20 Id, ProcessName, @{N="CPU";E={[math]::Round($_.CPU,1)}}, @{N="MemMB";E={[math]::Round($_.WorkingSet64/1MB,1)}} | ConvertTo-Json -Compress',
-      timeout: 10000, windowsHide: true, encoding: 'utf8',
+    const { execFile: execF } = require('child_process');
+    const psCmd = 'Get-Process|Sort-Object CPU -Descending|Select-Object -First 20 Id,ProcessName,@{N="CPU";E={[math]::Round($_.CPU,1)}},@{N="MemMB";E={[math]::Round($_.WorkingSet64/1MB,1)}}|ConvertTo-Json -Compress';
+    const enc = Buffer.from(psCmd, 'utf16le').toString('base64');
+    const raw = await new Promise<string>((resolve, reject) => {
+      execF('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', enc],
+        { timeout: 10000, windowsHide: true, encoding: 'utf8' },
+        (err: any, stdout: string) => err ? reject(err) : resolve(stdout));
     });
-    if (result.error) throw result.error;
-    let procs = JSON.parse((result.stdout || '[]').trim());
+    let procs = JSON.parse((raw || '[]').trim());
     if (!Array.isArray(procs)) procs = procs ? [procs] : [];
     return { success: true, processes: procs };
   } catch (error: any) {
@@ -4035,11 +4048,14 @@ ipcMain.handle('forge-get-top-cpu-processes', async () => {
 
 ipcMain.handle('forge-get-cpu-core-count', async () => {
   try {
-    const { execSync } = require('child_process');
-    const out = execSync(
-      'powershell -NoProfile -NonInteractive -Command "Get-CimInstance Win32_Processor | Select-Object -First 1 NumberOfCores, NumberOfLogicalProcessors | ConvertTo-Json -Compress"',
-      { timeout: 5000, windowsHide: true, encoding: 'utf8' }
-    ).trim();
+    const { execFile: execF } = require('child_process');
+    const psCmd = 'Get-CimInstance Win32_Processor|Select-Object -First 1 NumberOfCores,NumberOfLogicalProcessors|ConvertTo-Json -Compress';
+    const enc = Buffer.from(psCmd, 'utf16le').toString('base64');
+    const out = (await new Promise<string>((resolve, reject) => {
+      execF('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', enc],
+        { timeout: 5000, windowsHide: true, encoding: 'utf8' },
+        (err: any, stdout: string) => err ? reject(err) : resolve(stdout));
+    })).trim();
     const parsed = JSON.parse(out);
     const physicalCores = typeof parsed.NumberOfCores === 'number' ? parsed.NumberOfCores : Math.max(1, Math.ceil(os.cpus().length / 2));
     const logicalThreads = typeof parsed.NumberOfLogicalProcessors === 'number' ? parsed.NumberOfLogicalProcessors : os.cpus().length;
@@ -4086,7 +4102,8 @@ ipcMain.handle('forge-set-power-plan', async (_event, plan: string) => {
   if (!isAdmin) return { success: false, message: 'Admin privileges required' };
   try {
     const guids: Record<string, string> = { balanced: '381b4222-f694-41f0-9685-ff5bb260df2e', high: '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c', saver: 'a1841308-3541-4fab-bc81-f71556f20b4a' };
-    const guid = guids[plan.toLowerCase()] || plan;
+    const guid = guids[plan.toLowerCase()];
+    if (!guid) return { success: false, message: 'Unknown power plan. Allowed: balanced, high, saver' };
     await execPromise(`powercfg /setactive ${guid}`, { windowsHide: true, timeout: 5000 });
     return { success: true, planName: plan, message: `Power plan set to ${plan}` };
   } catch (error: any) {
@@ -4097,12 +4114,13 @@ ipcMain.handle('forge-set-power-plan', async (_event, plan: string) => {
 ipcMain.handle('forge-toggle-startup-item', async (_event, name: string, enable: boolean) => {
   if (!isAdmin) return { success: false, message: 'Admin privileges required' };
   try {
-    const escaped = name.replace(/'/g, "''");
+    const safeName = sanitizeShellArg(name);
+    if (!safeName || safeName.length > 256) return { success: false, message: 'Invalid startup item name' };
     if (enable) {
       return { success: false, message: 'Re-enabling startup items requires manual registry edit' };
     }
-    await execPromise(`powershell -NoProfile -Command "Remove-ItemProperty -Path 'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run' -Name '${escaped}' -ErrorAction SilentlyContinue"`, { windowsHide: true, timeout: 5000 });
-    return { success: true, message: `Startup item "${name}" disabled` };
+    await execPromise(`powershell -NoProfile -Command "Remove-ItemProperty -Path 'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run' -Name '${safeName}' -ErrorAction SilentlyContinue"`, { windowsHide: true, timeout: 5000 });
+    return { success: true, message: `Startup item "${safeName}" disabled` };
   } catch (error: any) {
     return { success: false, message: error.message };
   }
@@ -4111,13 +4129,14 @@ ipcMain.handle('forge-toggle-startup-item', async (_event, name: string, enable:
 ipcMain.handle('forge-toggle-windows-service', async (_event, name: string, enable: boolean) => {
   if (!isAdmin) return { success: false, message: 'Admin privileges required' };
   try {
-    const escaped = name.replace(/'/g, "''");
+    const safeName = sanitizeShellArg(name);
+    if (!safeName || safeName.length > 256) return { success: false, message: 'Invalid service name' };
     if (enable) {
-      await execPromise(`powershell -NoProfile -Command "Set-Service -Name '${escaped}' -StartupType Automatic; Start-Service -Name '${escaped}' -ErrorAction SilentlyContinue"`, { windowsHide: true, timeout: 10000 });
+      await execPromise(`powershell -NoProfile -Command "Set-Service -Name '${safeName}' -StartupType Automatic; Start-Service -Name '${safeName}' -ErrorAction SilentlyContinue"`, { windowsHide: true, timeout: 10000 });
     } else {
-      await execPromise(`powershell -NoProfile -Command "Stop-Service -Name '${escaped}' -Force -ErrorAction SilentlyContinue; Set-Service -Name '${escaped}' -StartupType Disabled"`, { windowsHide: true, timeout: 10000 });
+      await execPromise(`powershell -NoProfile -Command "Stop-Service -Name '${safeName}' -Force -ErrorAction SilentlyContinue; Set-Service -Name '${safeName}' -StartupType Disabled"`, { windowsHide: true, timeout: 10000 });
     }
-    return { success: true, message: `Service "${name}" ${enable ? 'enabled' : 'disabled'}` };
+    return { success: true, message: `Service "${safeName}" ${enable ? 'enabled' : 'disabled'}` };
   } catch (error: any) {
     return { success: false, message: error.message };
   }
@@ -4130,8 +4149,8 @@ ipcMain.handle('forge-disable-all-bloatware', async () => {
     let disabled = 0;
     for (const svc of bloatware) {
       try {
-        execSync(`sc config "${svc}" start= disabled`, { windowsHide: true, timeout: 5000 });
-        try { execSync(`sc stop "${svc}"`, { windowsHide: true, timeout: 5000 }); } catch { /* */ }
+        await execPromise(`sc config "${svc}" start= disabled`, { windowsHide: true, timeout: 5000 });
+        try { await execPromise(`sc stop "${svc}"`, { windowsHide: true, timeout: 5000 }); } catch (e: any) { console.warn(`[Bloatware] Failed to stop ${svc}:`, (e as any)?.message); }
         disabled++;
       } catch { /* skip */ }
     }
@@ -4144,13 +4163,16 @@ ipcMain.handle('forge-disable-all-bloatware', async () => {
 ipcMain.handle('forge-backup-services-state', async () => {
   try {
     const backupPath = path.join(app.getPath('userData'), 'services-backup.json');
-    const { spawnSync } = require('child_process');
-    const result = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', '-'], {
-      input: 'Get-Service | Select-Object Name, StartType | ConvertTo-Json -Compress',
-      timeout: 15000, windowsHide: true, encoding: 'utf8',
+    const { execFile: execF } = require('child_process');
+    const psCmd = 'Get-Service|Select-Object Name,StartType|ConvertTo-Json -Compress';
+    const enc = Buffer.from(psCmd, 'utf16le').toString('base64');
+    const raw = await new Promise<string>((resolve, reject) => {
+      execF('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', enc],
+        { timeout: 15000, windowsHide: true, encoding: 'utf8' },
+        (err: any, stdout: string) => err ? reject(err) : resolve(stdout));
     });
-    if (result.stdout) {
-      fs.writeFileSync(backupPath, result.stdout.trim(), 'utf8');
+    if (raw?.trim()) {
+      fs.writeFileSync(backupPath, raw.trim(), 'utf8');
       return { success: true, backupFile: backupPath, message: 'Services state backed up' };
     }
     return { success: false, message: 'No output from service enumeration' };
@@ -4167,10 +4189,14 @@ ipcMain.handle('forge-restore-services-state', async () => {
     let services = JSON.parse(fs.readFileSync(backupPath, 'utf8'));
     if (!Array.isArray(services)) services = services ? [services] : [];
     let restored = 0;
+    const VALID_START_TYPES = new Set(['Automatic', 'Manual', 'Disabled', 'Boot', 'System']);
     for (const svc of services) {
       try {
-        const startType = String(svc.StartType || 'Manual');
-        execSync(`powershell -NoProfile -Command "Set-Service -Name '${svc.Name}' -StartupType '${startType}' -ErrorAction SilentlyContinue"`, { windowsHide: true, timeout: 3000 });
+        const safeName = sanitizeShellArg(String(svc.Name || ''));
+        if (!safeName) continue;
+        const rawType = String(svc.StartType || 'Manual');
+        const startType = VALID_START_TYPES.has(rawType) ? rawType : 'Manual';
+        await execPromise(`powershell -NoProfile -Command "Set-Service -Name '${safeName}' -StartupType '${startType}' -ErrorAction SilentlyContinue"`, { windowsHide: true, timeout: 3000 });
         restored++;
       } catch { /* skip */ }
     }
@@ -4182,12 +4208,15 @@ ipcMain.handle('forge-restore-services-state', async () => {
 
 ipcMain.handle('forge-get-drive-info', async () => {
   try {
-    const { spawnSync } = require('child_process');
-    const result = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', '-'], {
-      input: 'Get-PSDrive -PSProvider FileSystem | Select-Object Name, @{N="UsedGB";E={[math]::Round($_.Used/1GB,2)}}, @{N="FreeGB";E={[math]::Round($_.Free/1GB,2)}} | ConvertTo-Json -Compress',
-      timeout: 10000, windowsHide: true, encoding: 'utf8',
+    const { execFile: execF } = require('child_process');
+    const psCmd = 'Get-PSDrive -PSProvider FileSystem|Select-Object Name,@{N="UsedGB";E={[math]::Round($_.Used/1GB,2)}},@{N="FreeGB";E={[math]::Round($_.Free/1GB,2)}}|ConvertTo-Json -Compress';
+    const enc = Buffer.from(psCmd, 'utf16le').toString('base64');
+    const raw = await new Promise<string>((resolve, reject) => {
+      execF('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', enc],
+        { timeout: 10000, windowsHide: true, encoding: 'utf8' },
+        (err: any, stdout: string) => err ? reject(err) : resolve(stdout));
     });
-    let drives = JSON.parse((result.stdout || '[]').trim());
+    let drives = JSON.parse((raw || '[]').trim());
     if (!Array.isArray(drives)) drives = drives ? [drives] : [];
     return { success: true, drives };
   } catch (error: any) {
@@ -4204,12 +4233,12 @@ ipcMain.handle('forge-analyze-disk-cleanup', async () => {
     try {
       const files = fs.readdirSync(tempDir);
       let size = 0;
-      for (const f of files) { try { size += fs.statSync(path.join(tempDir, f)).size; } catch { /* */ } }
+      for (const f of files) { try { size += fs.statSync(path.join(tempDir, f)).size; } catch { /* stat may fail for locked files */ } }
       const mb = Math.round(size / (1024 * 1024));
       locations.push({ path: tempDir, sizeMB: mb, files: files.length, label: 'Temp Files' });
       totalMB += mb;
       totalFiles += files.length;
-    } catch { /* */ }
+    } catch (e: any) { console.warn('[Temp] Failed to scan temp dir:', e?.message); }
     return { success: true, locations, totalMB, totalFiles };
   } catch (error: any) {
     return { success: false, locations: [], totalMB: 0, totalFiles: 0, error: error.message };
@@ -4266,12 +4295,15 @@ ipcMain.handle('set-power-plan', async (_event, plan: string) => {
 
 ipcMain.handle('get-startup-apps', async () => {
   try {
-    const { spawnSync } = require('child_process');
-    const result = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', '-'], {
-      input: 'Get-CimInstance Win32_StartupCommand | Select-Object Name, Command, Location | ConvertTo-Json -Compress',
-      timeout: 10000, windowsHide: true, encoding: 'utf8',
+    const { execFile: execF } = require('child_process');
+    const psCmd = 'Get-CimInstance Win32_StartupCommand|Select-Object Name,Command,Location|ConvertTo-Json -Compress';
+    const enc = Buffer.from(psCmd, 'utf16le').toString('base64');
+    const raw = await new Promise<string>((resolve, reject) => {
+      execF('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', enc],
+        { timeout: 10000, windowsHide: true, encoding: 'utf8' },
+        (err: any, stdout: string) => err ? reject(err) : resolve(stdout));
     });
-    let apps = JSON.parse((result.stdout || '[]').trim());
+    let apps = JSON.parse((raw || '[]').trim());
     if (!Array.isArray(apps)) apps = apps ? [apps] : [];
     return apps;
   } catch { return []; }
@@ -4283,12 +4315,15 @@ ipcMain.handle('toggle-startup-app', async (_event, program: any, enable: boolea
 
 ipcMain.handle('get-services', async () => {
   try {
-    const { spawnSync } = require('child_process');
-    const result = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', '-'], {
-      input: 'Get-Service | Select-Object Name, DisplayName, Status, StartType | ConvertTo-Json -Compress',
-      timeout: 15000, windowsHide: true, encoding: 'utf8',
+    const { execFile: execF } = require('child_process');
+    const psCmd = 'Get-Service|Select-Object Name,DisplayName,Status,StartType|ConvertTo-Json -Compress';
+    const enc = Buffer.from(psCmd, 'utf16le').toString('base64');
+    const raw = await new Promise<string>((resolve, reject) => {
+      execF('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', enc],
+        { timeout: 15000, windowsHide: true, encoding: 'utf8' },
+        (err: any, stdout: string) => err ? reject(err) : resolve(stdout));
     });
-    let svcs = JSON.parse((result.stdout || '[]').trim());
+    let svcs = JSON.parse((raw || '[]').trim());
     if (!Array.isArray(svcs)) svcs = svcs ? [svcs] : [];
     return svcs;
   } catch { return []; }
@@ -4308,12 +4343,15 @@ ipcMain.handle('toggle-service', async (_event, serviceName: string, enable: boo
 
 ipcMain.handle('get-disk-info', async () => {
   try {
-    const { spawnSync } = require('child_process');
-    const result = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', '-'], {
-      input: 'Get-PSDrive -PSProvider FileSystem | Select-Object Name, @{N="UsedGB";E={[math]::Round($_.Used/1GB,2)}}, @{N="FreeGB";E={[math]::Round($_.Free/1GB,2)}} | ConvertTo-Json -Compress',
-      timeout: 10000, windowsHide: true, encoding: 'utf8',
+    const { execFile: execF } = require('child_process');
+    const psCmd = 'Get-PSDrive -PSProvider FileSystem|Select-Object Name,@{N="UsedGB";E={[math]::Round($_.Used/1GB,2)}},@{N="FreeGB";E={[math]::Round($_.Free/1GB,2)}}|ConvertTo-Json -Compress';
+    const enc = Buffer.from(psCmd, 'utf16le').toString('base64');
+    const raw = await new Promise<string>((resolve, reject) => {
+      execF('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', enc],
+        { timeout: 10000, windowsHide: true, encoding: 'utf8' },
+        (err: any, stdout: string) => err ? reject(err) : resolve(stdout));
     });
-    let drives = JSON.parse((result.stdout || '[]').trim());
+    let drives = JSON.parse((raw || '[]').trim());
     if (!Array.isArray(drives)) drives = drives ? [drives] : [];
     return { success: true, drives };
   } catch { return { success: true, drives: [] }; }
@@ -4321,12 +4359,16 @@ ipcMain.handle('get-disk-info', async () => {
 
 ipcMain.handle('analyze-disk', async (_event, drive: string) => {
   try {
-    const { spawnSync } = require('child_process');
-    const result = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', '-'], {
-      input: `$d = Get-PSDrive ${drive.replace(':','')}; [PSCustomObject]@{UsedGB=[math]::Round($d.Used/1GB,2);FreeGB=[math]::Round($d.Free/1GB,2)} | ConvertTo-Json -Compress`,
-      timeout: 10000, windowsHide: true, encoding: 'utf8',
+    const { execFile: execF } = require('child_process');
+    const safeDrive = String(drive).replace(/[^a-zA-Z]/g, '');
+    const psCmd = `$d=Get-PSDrive ${safeDrive};[PSCustomObject]@{UsedGB=[math]::Round($d.Used/1GB,2);FreeGB=[math]::Round($d.Free/1GB,2)}|ConvertTo-Json -Compress`;
+    const enc = Buffer.from(psCmd, 'utf16le').toString('base64');
+    const raw = await new Promise<string>((resolve, reject) => {
+      execF('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', enc],
+        { timeout: 10000, windowsHide: true, encoding: 'utf8' },
+        (err: any, stdout: string) => err ? reject(err) : resolve(stdout));
     });
-    return { success: true, data: JSON.parse((result.stdout || '{}').trim()) };
+    return { success: true, data: JSON.parse((raw || '{}').trim()) };
   } catch (error: any) { return { success: false, error: error.message }; }
 });
 
@@ -4335,7 +4377,7 @@ ipcMain.handle('clean-disk', async (_event, items: string[]) => {
   try {
     let cleaned = 0;
     for (const item of items) {
-      try { if (fs.existsSync(item)) { fs.rmSync(item, { recursive: true, force: true }); cleaned++; } } catch { /* */ }
+      try { if (fs.existsSync(item)) { fs.rmSync(item, { recursive: true, force: true }); cleaned++; } } catch (e: any) { console.warn('[Cleanup] Failed to remove:', item, e?.message); }
     }
     return { success: true, message: `Cleaned ${cleaned} items` };
   } catch (error: any) { return { success: false, message: error.message }; }
@@ -4580,31 +4622,37 @@ ipcMain.handle('get-network-diagnostics', async () => {
 
 ipcMain.handle('get-temperatures', async () => {
   try {
-    const { spawnSync } = require('child_process');
-    const result = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', '-'], {
-      input: '$t = Get-CimInstance MSAcpi_ThermalZoneTemperature -Namespace root/wmi -ErrorAction SilentlyContinue | Select-Object -First 1; if($t){[math]::Round(($t.CurrentTemperature - 2732) / 10, 1)}else{-1}',
-      timeout: 5000, windowsHide: true, encoding: 'utf8',
+    const { execFile: execF } = require('child_process');
+    const psCmd = '$t=Get-CimInstance MSAcpi_ThermalZoneTemperature -Namespace root/wmi -EA SilentlyContinue|Select-Object -First 1;if($t){[math]::Round(($t.CurrentTemperature-2732)/10,1)}else{-1}';
+    const enc = Buffer.from(psCmd, 'utf16le').toString('base64');
+    const raw = await new Promise<string>((resolve, reject) => {
+      execF('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', enc],
+        { timeout: 5000, windowsHide: true, encoding: 'utf8' },
+        (err: any, stdout: string) => err ? reject(err) : resolve(stdout));
     });
-    const temp = parseFloat((result.stdout || '-1').trim());
+    const temp = parseFloat((raw || '-1').trim());
     return { success: true, data: { cpuTemp: isNaN(temp) ? -1 : temp, gpuTemp: -1 } };
   } catch { return { success: true, data: { cpuTemp: -1, gpuTemp: -1 } }; }
 });
 
 ipcMain.handle('get-security-status', async () => {
   try {
-    const { spawnSync } = require('child_process');
-    const result = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', '-'], {
-      input: `$fw = (Get-NetFirewallProfile | Where-Object {$_.Enabled}).Count; $def = (Get-MpComputerStatus -ErrorAction SilentlyContinue); [PSCustomObject]@{firewallProfiles=$fw;defenderEnabled=$def.AntivirusEnabled;realTimeProtection=$def.RealTimeProtectionEnabled} | ConvertTo-Json -Compress`,
-      timeout: 10000, windowsHide: true, encoding: 'utf8',
+    const { execFile: execF } = require('child_process');
+    const psCmd = '$fw=(Get-NetFirewallProfile|Where-Object{$_.Enabled}).Count;$def=(Get-MpComputerStatus -EA SilentlyContinue);[PSCustomObject]@{firewallProfiles=$fw;defenderEnabled=$def.AntivirusEnabled;realTimeProtection=$def.RealTimeProtectionEnabled}|ConvertTo-Json -Compress';
+    const enc = Buffer.from(psCmd, 'utf16le').toString('base64');
+    const raw = await new Promise<string>((resolve, reject) => {
+      execF('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', enc],
+        { timeout: 10000, windowsHide: true, encoding: 'utf8' },
+        (err: any, stdout: string) => err ? reject(err) : resolve(stdout));
     });
-    return { success: true, data: JSON.parse((result.stdout || '{}').trim()) };
+    return { success: true, data: JSON.parse((raw || '{}').trim()) };
   } catch (error: any) { return { success: false, error: error.message }; }
 });
 
 ipcMain.handle('enable-firewall', async () => {
   if (!isAdmin) return { success: false, error: 'Admin privileges required' };
   try {
-    execSync('netsh advfirewall set allprofiles state on', { windowsHide: true, timeout: 10000 });
+    await execPromise('netsh advfirewall set allprofiles state on', { windowsHide: true, timeout: 10000 });
     return { success: true };
   } catch (error: any) { return { success: false, error: error.message }; }
 });
@@ -4628,7 +4676,7 @@ ipcMain.handle('enable-defender', async () => {
 ipcMain.handle('enable-uac', async () => {
   if (!isAdmin) return { success: false, error: 'Admin privileges required' };
   try {
-    execSync('reg add "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System" /v EnableLUA /t REG_DWORD /d 1 /f', { windowsHide: true, timeout: 5000 });
+    await execPromise('reg add "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System" /v EnableLUA /t REG_DWORD /d 1 /f', { windowsHide: true, timeout: 5000 });
     return { success: true };
   } catch (error: any) { return { success: false, error: error.message }; }
 });
@@ -4637,12 +4685,15 @@ const _enhancedCpuPrev = new Map<number, { name: string; cpuMs: number; ts: numb
 ipcMain.handle('get-processes-enhanced', async () => {
   try {
     const { getProcessKillRisk } = await import('../shared/constants');
-    const { spawnSync } = require('child_process');
-    const result = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', '-'], {
-      input: `Get-Process | Where-Object { $_.Id -gt 0 } | Sort-Object WorkingSet64 -Descending | Select-Object -First 80 Id, ProcessName, @{N="CPUms";E={[math]::Round($_.TotalProcessorTime.TotalMilliseconds)}}, @{N="MemMB";E={[math]::Round($_.WorkingSet64/1MB,1)}}, Path, Description, Company | ConvertTo-Json -Compress`,
-      timeout: 12000, windowsHide: true, encoding: 'utf8',
+    const { execFile: execF } = require('child_process');
+    const psCmd = `$ErrorActionPreference='SilentlyContinue';Get-Process|Where-Object{$_.Id -gt 0}|Sort-Object WorkingSet64 -Descending|Select-Object -First 80 Id,ProcessName,@{N="CPUms";E={try{[math]::Round($_.TotalProcessorTime.TotalMilliseconds)}catch{0}}},@{N="MemMB";E={[math]::Round($_.WorkingSet64/1MB,1)}},Path,Description,Company|ConvertTo-Json -Compress`;
+    const enc = Buffer.from(psCmd, 'utf16le').toString('base64');
+    const raw = await new Promise<string>((resolve, reject) => {
+      execF('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', enc],
+        { timeout: 12000, windowsHide: true, encoding: 'utf8', maxBuffer: 10 * 1024 * 1024 },
+        (err: any, stdout: string) => err ? reject(err) : resolve(stdout));
     });
-    let procs = JSON.parse((result.stdout || '[]').trim());
+    let procs = JSON.parse((raw || '[]').trim());
     if (!Array.isArray(procs)) procs = procs ? [procs] : [];
     const now = Date.now();
     const cores = os.cpus().length || 1;
@@ -4682,11 +4733,14 @@ ipcMain.handle('kill-process', async (_event, pid: number) => {
 
 ipcMain.handle('get-startup-programs', async () => {
   try {
-    const { spawnSync } = require('child_process');
-    const result = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', '-'], {
-      input: 'Get-CimInstance Win32_StartupCommand | Select-Object Name, Command, Location, User | ConvertTo-Json -Compress',
-      timeout: 10000, windowsHide: true, encoding: 'utf8',
-    });
+    const { execFile: execF } = require('child_process');
+    const psCmd = 'Get-CimInstance Win32_StartupCommand|Select-Object Name,Command,Location,User|ConvertTo-Json -Compress';
+    const enc = Buffer.from(psCmd, 'utf16le').toString('base64');
+    const result = { stdout: await new Promise<string>((resolve, reject) => {
+      execF('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', enc],
+        { timeout: 10000, windowsHide: true, encoding: 'utf8' },
+        (err: any, stdout: string) => err ? reject(err) : resolve(stdout));
+    }) };
     let progs = JSON.parse((result.stdout || '[]').trim());
     if (!Array.isArray(progs)) progs = progs ? [progs] : [];
     return { success: true, programs: progs };

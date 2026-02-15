@@ -8,6 +8,7 @@ import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { notify } from '../components/Common/SentinelNotification';
 import { LegacyScanCheckItem as ScanCheckItem } from '../components/Common/ScanCheckItem';
+import { useTranslation } from 'react-i18next';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const api = (): any => (window as any).electronAPI;
@@ -91,6 +92,7 @@ interface ModuleScanResult {
 }
 
 const SystemPage: React.FC = () => {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const [data, setData] = useState<SystemData | null>(null);
   const [health, setHealth] = useState<HealthReport | null>(null);
@@ -188,7 +190,7 @@ const SystemPage: React.FC = () => {
         <motion.div className="s-card-spacy" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: 20 }}>
           <GaugeRing value={data?.cpu.currentLoad ?? 0} label="CPU" color={gaugeColor(data?.cpu.currentLoad ?? 0)} />
           <div style={{ marginTop: 8, fontSize: '0.75rem', color: 'var(--s-text-muted)', textAlign: 'center' }}>
-            {data?.cpu.name || 'Loading...'}
+            {data?.cpu.name || t('common.loading')}
           </div>
           <div style={{ fontSize: '0.6875rem', color: 'var(--s-text-dim)' }}>
             {data?.cpu.cores ?? 0} Cores / {data?.cpu.threads ?? 0} Threads
@@ -201,7 +203,7 @@ const SystemPage: React.FC = () => {
             {data?.ram.usedGB ?? 0} / {data?.ram.totalGB ?? 0} GB
           </div>
           <div style={{ fontSize: '0.6875rem', color: 'var(--s-text-dim)' }}>
-            {data?.ram.freeGB ?? 0} GB Free
+            {data?.ram.freeGB ?? 0} GB {t('common.none')}
           </div>
         </motion.div>
 
@@ -212,7 +214,7 @@ const SystemPage: React.FC = () => {
               {disk.usedGB} / {disk.totalGB} GB
             </div>
             <div style={{ fontSize: '0.6875rem', color: 'var(--s-text-dim)' }}>
-              {disk.freeGB} GB Free
+              {disk.freeGB} GB {t('common.none')}
             </div>
           </motion.div>
         ))}
@@ -237,17 +239,17 @@ const SystemPage: React.FC = () => {
         {/* OS & System */}
         <motion.div className="s-card-spacy" initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.2 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-            <span style={{ fontWeight: 700, fontSize: '0.85rem', fontFamily: 'var(--s-font-display)', background: 'linear-gradient(90deg, var(--s-cyan), rgba(167,139,250,0.8))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>System Information</span>
+            <span style={{ fontWeight: 700, fontSize: '0.85rem', fontFamily: 'var(--s-font-display)', background: 'linear-gradient(90deg, var(--s-cyan), rgba(167,139,250,0.8))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>{t('system.title')}</span>
             <div className="s-section-divider" style={{ flex: 1 }} />
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {[
-              { label: 'Computer', value: data?.system.computerName },
-              { label: 'User', value: data?.system.username },
-              { label: 'OS', value: data?.os.name },
-              { label: 'Version', value: data?.os.version },
-              { label: 'Build', value: data?.os.build },
-              { label: 'Architecture', value: data?.system.model },
+              { label: t('system.overview.hostname'), value: data?.system.computerName },
+              { label: t('system.overview.user'), value: data?.system.username },
+              { label: t('system.overview.os'), value: data?.os.name },
+              { label: t('system.overview.version'), value: data?.os.version },
+              { label: t('system.overview.build'), value: data?.os.build },
+              { label: t('system.hardware.motherboard'), value: data?.system.model },
             ].map((row) => (
               <div key={row.label} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px solid rgba(109,120,255,0.06)' }}>
                 <span style={{ fontSize: '0.8125rem', color: 'var(--s-text-muted)' }}>{row.label}</span>
@@ -260,13 +262,13 @@ const SystemPage: React.FC = () => {
         {/* GPU & Network */}
         <motion.div className="s-card-spacy" initial={{ opacity: 0, x: 8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.2 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-            <span style={{ fontWeight: 700, fontSize: '0.85rem', fontFamily: 'var(--s-font-display)', background: 'linear-gradient(90deg, var(--s-green), var(--s-cyan))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>Hardware</span>
+            <span style={{ fontWeight: 700, fontSize: '0.85rem', fontFamily: 'var(--s-font-display)', background: 'linear-gradient(90deg, var(--s-green), var(--s-cyan))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>{t('system.tabs.hardware')}</span>
             <div className="s-section-divider" style={{ flex: 1 }} />
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {(data?.gpu ?? []).map((g, i) => (
               <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px solid rgba(109,120,255,0.06)' }}>
-                <span style={{ fontSize: '0.8125rem', color: 'var(--s-text-muted)' }}>GPU {i + 1}</span>
+                <span style={{ fontSize: '0.8125rem', color: 'var(--s-text-muted)' }}>{t('system.hardware.gpu', { index: i + 1 })}</span>
                 <span style={{ fontSize: '0.8125rem' }}>{g.name} ({g.memory} MB)</span>
               </div>
             ))}
@@ -281,7 +283,7 @@ const SystemPage: React.FC = () => {
             ))}
             {data?.battery && data.battery.status !== 'N/A' && (
               <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}>
-                <span style={{ fontSize: '0.8125rem', color: 'var(--s-text-muted)' }}>Battery</span>
+                <span style={{ fontSize: '0.8125rem', color: 'var(--s-text-muted)' }}>{t('system.hardware.battery')}</span>
                 <span style={{ fontSize: '0.8125rem' }}>{data.battery.percentage}% ({data.battery.status})</span>
               </div>
             )}
@@ -292,16 +294,16 @@ const SystemPage: React.FC = () => {
       {/* ─── Full Hardware Discovery Grid ─── */}
       <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.25 }}>
         <div className="s-flex-between" style={{ marginBottom: 12 }}>
-          <span style={{ fontWeight: 700, fontSize: '0.85rem', fontFamily: 'var(--s-font-display)', background: 'linear-gradient(90deg, var(--s-cyan), var(--s-purple))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>Hardware Discovery</span>
+          <span style={{ fontWeight: 700, fontSize: '0.85rem', fontFamily: 'var(--s-font-display)', background: 'linear-gradient(90deg, var(--s-cyan), var(--s-purple))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>{t('system.hardware.title')}</span>
           <button className="s-btn s-btn-ghost s-btn-sm" onClick={fetchHardware} disabled={hwLoading}>
-            {hwLoading ? 'Scanning...' : '↻ Refresh'}
+            {hwLoading ? t('common.loading') : `↻ ${t('common.refresh')}`}
           </button>
         </div>
         {hwReport ? (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
             {/* GPU */}
             <div className="s-card-spacy" style={{ padding: 14 }}>
-              <div style={{ fontSize: '0.6875rem', color: 'var(--s-text-dim)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>GPU</div>
+              <div style={{ fontSize: '0.6875rem', color: 'var(--s-text-dim)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>{t('system.hardware.gpu')}</div>
               {hwReport.gpu.length > 0 ? hwReport.gpu.map((g, i) => (
                 <div key={i} style={{ marginBottom: 6 }}>
                   <div style={{ fontSize: '0.8125rem', fontWeight: 600, color: '#e2e8f0' }}>{g.name}</div>
@@ -310,12 +312,12 @@ const SystemPage: React.FC = () => {
                   </div>
                   <div style={{ fontSize: '0.625rem', color: 'var(--s-text-dim)' }}>Driver: {g.driver || 'N/A'}</div>
                 </div>
-              )) : <div style={{ fontSize: '0.75rem', color: 'var(--s-text-dim)' }}>No GPU detected</div>}
+              )) : <div style={{ fontSize: '0.75rem', color: 'var(--s-text-dim)' }}>{t('common.noData')}</div>}
             </div>
 
             {/* RAM Slots */}
             <div className="s-card-spacy" style={{ padding: 14 }}>
-              <div style={{ fontSize: '0.6875rem', color: 'var(--s-text-dim)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Memory</div>
+              <div style={{ fontSize: '0.6875rem', color: 'var(--s-text-dim)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>{t('system.hardware.ram')}</div>
               <div style={{ fontSize: '0.8125rem', fontWeight: 600, color: '#e2e8f0', marginBottom: 4 }}>{hwReport.ram.totalGB} GB ({hwReport.ram.usedGB} used / {hwReport.ram.freeGB} free)</div>
               {hwReport.ram.slots.map((s, i) => (
                 <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.6875rem', color: 'var(--s-text-muted)', padding: '2px 0', borderBottom: '1px solid rgba(109,120,255,0.05)' }}>
@@ -327,7 +329,7 @@ const SystemPage: React.FC = () => {
 
             {/* Storage */}
             <div className="s-card-spacy" style={{ padding: 14 }}>
-              <div style={{ fontSize: '0.6875rem', color: 'var(--s-text-dim)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Storage</div>
+              <div style={{ fontSize: '0.6875rem', color: 'var(--s-text-dim)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>{t('system.hardware.disk')}</div>
               {hwReport.storage.drives.map((d, i) => (
                 <div key={i} style={{ marginBottom: 6 }}>
                   <div style={{ fontSize: '0.8125rem', fontWeight: 600, color: '#e2e8f0' }}>{d.model}</div>
@@ -345,7 +347,7 @@ const SystemPage: React.FC = () => {
 
             {/* Network Adapters */}
             <div className="s-card-spacy" style={{ padding: 14 }}>
-              <div style={{ fontSize: '0.6875rem', color: 'var(--s-text-dim)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Network Adapters</div>
+              <div style={{ fontSize: '0.6875rem', color: 'var(--s-text-dim)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>{t('system.hardware.network')}</div>
               {hwReport.network.adapters.map((a, i) => (
                 <div key={i} style={{ marginBottom: 6, paddingBottom: 4, borderBottom: '1px solid rgba(109,120,255,0.05)' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -365,7 +367,7 @@ const SystemPage: React.FC = () => {
 
             {/* Motherboard & BIOS */}
             <div className="s-card-spacy" style={{ padding: 14 }}>
-              <div style={{ fontSize: '0.6875rem', color: 'var(--s-text-dim)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Motherboard</div>
+              <div style={{ fontSize: '0.6875rem', color: 'var(--s-text-dim)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>{t('system.hardware.motherboard')}</div>
               {[
                 { label: 'Manufacturer', value: hwReport.motherboard.manufacturer },
                 { label: 'Product', value: hwReport.motherboard.product },
@@ -381,7 +383,7 @@ const SystemPage: React.FC = () => {
 
             {/* Security (TPM, Secure Boot) */}
             <div className="s-card-spacy" style={{ padding: 14 }}>
-              <div style={{ fontSize: '0.6875rem', color: 'var(--s-text-dim)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Security Hardware</div>
+              <div style={{ fontSize: '0.6875rem', color: 'var(--s-text-dim)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>{t('nav.security')}</div>
               {[
                 { label: 'TPM', value: hwReport.security.tpmPresent ? `Present (v${hwReport.security.tpmVersion || '?'})` : 'Not detected', ok: hwReport.security.tpmPresent },
                 { label: 'Secure Boot', value: hwReport.security.secureBoot ? 'Enabled' : 'Disabled', ok: hwReport.security.secureBoot },
@@ -395,7 +397,7 @@ const SystemPage: React.FC = () => {
 
             {/* Battery */}
             <div className="s-card-spacy" style={{ padding: 14 }}>
-              <div style={{ fontSize: '0.6875rem', color: 'var(--s-text-dim)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Battery & Power</div>
+              <div style={{ fontSize: '0.6875rem', color: 'var(--s-text-dim)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Battery</div>
               {hwReport.battery ? (
                 <>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
@@ -416,7 +418,7 @@ const SystemPage: React.FC = () => {
                     </div>
                   ))}
                 </>
-              ) : <div style={{ fontSize: '0.75rem', color: 'var(--s-text-dim)' }}>No battery detected (desktop)</div>}
+              ) : <div style={{ fontSize: '0.75rem', color: 'var(--s-text-dim)' }}>{t('common.noData')}</div>}
             </div>
 
             {/* Audio */}
@@ -427,7 +429,7 @@ const SystemPage: React.FC = () => {
                   <span style={{ color: 'var(--s-text-muted)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.name}</span>
                   <span style={{ color: d.status === 'OK' ? 'var(--s-green)' : 'var(--s-amber)', fontSize: '0.625rem', flexShrink: 0 }}>{d.status}</span>
                 </div>
-              )) : <div style={{ fontSize: '0.75rem', color: 'var(--s-text-dim)' }}>No audio devices</div>}
+              )) : <div style={{ fontSize: '0.75rem', color: 'var(--s-text-dim)' }}>{t('common.noData')}</div>}
             </div>
 
             {/* Bluetooth */}
@@ -440,7 +442,7 @@ const SystemPage: React.FC = () => {
                     <span style={{ color: 'var(--s-green)', fontSize: '0.625rem' }}>{d.status}</span>
                   </div>
                 ))
-              ) : <div style={{ fontSize: '0.75rem', color: 'var(--s-text-dim)' }}>No Bluetooth adapter</div>}
+              ) : <div style={{ fontSize: '0.75rem', color: 'var(--s-text-dim)' }}>{t('common.noData')}</div>}
             </div>
 
             {/* Thermal */}

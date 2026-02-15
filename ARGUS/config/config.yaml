@@ -47,10 +47,10 @@ detection:
   content_type_validation: true
 
 sandbox:
-  enabled: false                      # PRODUCTION: Sandbox OFF — no mock data
-  block_outbound_on_failure: true     # Wenn Sandbox crasht → kein Fallthrough
+  enabled: false                      # LIVE MODE — real DNS, WHOIS, SSL, GeoIP, Threat Intel
+  block_outbound_on_failure: false
   mock_engine:
-    enabled: false                    # PRODUCTION: Mock engine OFF — real API calls only
+    enabled: false                    # Mock engine OFF — all data is real
 
 threat_intel:
   virustotal_api_key: "${ARGUS_VIRUSTOTAL_KEY}"

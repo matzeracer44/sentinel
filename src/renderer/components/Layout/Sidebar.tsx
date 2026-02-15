@@ -6,6 +6,7 @@
 import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
+import { useTranslation } from 'react-i18next';
 
 interface NavItem {
   path: string;
@@ -15,35 +16,40 @@ interface NavItem {
   badge?: string | number;
 }
 
-const NAV_SECTIONS: { title: string; items: NavItem[] }[] = [
+interface NavSection {
+  titleKey: string;
+  items: (NavItem & { labelKey: string })[];
+}
+
+const NAV_SECTIONS: NavSection[] = [
   {
-    title: 'Overview',
+    titleKey: 'nav.overview',
     items: [
-      { path: '/', label: 'Dashboard', icon: '⬡' },
-      { path: '/connector-map', label: 'Connector Map', icon: '◎' },
+      { path: '/', label: '', labelKey: 'nav.dashboard', icon: '⬡' },
+      { path: '/connector-map', label: '', labelKey: 'nav.connectorMap', icon: '◎' },
     ],
   },
   {
-    title: 'Security',
+    titleKey: 'nav.security',
     items: [
-      { path: '/firewall', label: 'Firewall', icon: '🛡', cluster: 'firewall' },
-      { path: '/intel', label: 'Threat Intel', icon: '🔍', cluster: 'intel' },
-      { path: '/network', label: 'Network Monitor', icon: '🌐', cluster: 'network' },
+      { path: '/firewall', label: '', labelKey: 'nav.firewall', icon: '🛡', cluster: 'firewall' },
+      { path: '/intel', label: '', labelKey: 'nav.threatIntel', icon: '🔍', cluster: 'intel' },
+      { path: '/network', label: '', labelKey: 'nav.networkMonitor', icon: '🌐', cluster: 'network' },
     ],
   },
   {
-    title: 'Management',
+    titleKey: 'nav.management',
     items: [
-      { path: '/dns', label: 'DNS & Privacy', icon: '🔒', cluster: 'dns' },
-      { path: '/system', label: 'System', icon: '⚙', cluster: 'system' },
-      { path: '/vault', label: 'Vault', icon: '🗝', cluster: 'vault' },
+      { path: '/dns', label: '', labelKey: 'nav.dnsPrivacy', icon: '🔒', cluster: 'dns' },
+      { path: '/system', label: '', labelKey: 'nav.system', icon: '⚙', cluster: 'system' },
+      { path: '/vault', label: '', labelKey: 'nav.vault', icon: '🗝', cluster: 'vault' },
     ],
   },
   {
-    title: 'Tools',
+    titleKey: 'nav.tools',
     items: [
-      { path: '/automation', label: 'Automation', icon: '⚡', cluster: 'automation' },
-      { path: '/settings', label: 'Settings', icon: '☰' },
+      { path: '/automation', label: '', labelKey: 'nav.automation', icon: '⚡', cluster: 'automation' },
+      { path: '/settings', label: '', labelKey: 'nav.settings', icon: '☰' },
     ],
   },
 ];
@@ -61,6 +67,7 @@ const CLUSTER_COLORS: Record<string, string> = {
 const Sidebar: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
+  const { t } = useTranslation();
 
   const isActive = (path: string): boolean => {
     if (path === '/') return location.pathname === '/';
@@ -105,7 +112,7 @@ const Sidebar: React.FC = () => {
             SENTINEL
           </div>
           <div style={{ fontSize: '0.55rem', color: 'var(--s-text-dim)', letterSpacing: '0.14em', textTransform: 'uppercase', marginTop: 1 }}>
-            Security Suite
+            {t('nav.securitySuite')}
           </div>
         </div>
       </div>
@@ -120,11 +127,11 @@ const Sidebar: React.FC = () => {
       {/* ─── Navigation Sections ─── */}
       <div style={{ flex: 1, overflowY: 'auto', paddingBottom: 16, position: 'relative', zIndex: 1 }}>
         {NAV_SECTIONS.map((section) => (
-          <div key={section.title}>
+          <div key={section.titleKey}>
             <div className="s-nav-section" style={{
               display: 'flex', alignItems: 'center', gap: 8,
             }}>
-              <span>{section.title}</span>
+              <span>{t(section.titleKey)}</span>
               <div style={{ flex: 1, height: 1, background: 'linear-gradient(90deg, rgba(109,120,255,0.15), transparent)' }} />
             </div>
             {section.items.map((item) => {
@@ -156,7 +163,7 @@ const Sidebar: React.FC = () => {
                   >
                     {item.icon}
                   </motion.span>
-                  <span style={{ fontWeight: active ? 600 : 500 }}>{item.label}</span>
+                  <span style={{ fontWeight: active ? 600 : 500 }}>{t((item as any).labelKey)}</span>
                   {item.badge !== undefined && (
                     <span className="s-badge s-badge-red" style={{ marginLeft: 'auto', fontSize: '0.6rem' }}>
                       {item.badge}
@@ -192,7 +199,7 @@ const Sidebar: React.FC = () => {
           transition={{ duration: 2, repeat: Infinity, ease: 'easeInOut' }}
           style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--s-green)', flexShrink: 0 }}
         />
-        <span style={{ fontSize: '0.675rem', color: 'var(--s-text-muted)', flex: 1 }}>System Protected</span>
+        <span style={{ fontSize: '0.675rem', color: 'var(--s-text-muted)', flex: 1 }}>{t('nav.systemProtected')}</span>
         <span style={{
           fontSize: '0.55rem', padding: '2px 7px', borderRadius: 6,
           background: 'rgba(60,240,255,0.06)', border: '1px solid rgba(60,240,255,0.15)',

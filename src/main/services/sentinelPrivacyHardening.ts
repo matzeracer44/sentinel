@@ -4,7 +4,9 @@
  * USB lock, GPO hardening, fingerprint protection, etc.
  */
 
-import { spawnSync } from 'child_process';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+const execFileAsync = promisify(execFile);
 
 export interface PrivCheck {
   id: string;
@@ -15,37 +17,37 @@ export interface PrivCheck {
   actionable?: boolean;
 }
 
-function ps(script: string, timeout = 12000): string {
-  const r = spawnSync('powershell.exe',
-    ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', '-'],
-    { input: script, timeout, windowsHide: true, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 }
+async function ps(script: string, timeout = 12000): Promise<string> {
+  const encoded = Buffer.from(script, 'utf16le').toString('base64');
+  const { stdout } = await execFileAsync('powershell.exe',
+    ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded],
+    { timeout, windowsHide: true, maxBuffer: 4 * 1024 * 1024 }
   );
-  if (r.error) throw r.error;
-  return (r.stdout || '').trim();
+  return (stdout || '').trim();
 }
 
-function safe(id: string, name: string, fn: () => PrivCheck): PrivCheck {
-  try { return fn(); } catch (e: any) { return { id, name, status: 'unknown', detail: e.message, risk: 'medium' }; }
+async function safe(id: string, name: string, fn: () => Promise<PrivCheck>): Promise<PrivCheck> {
+  try { return await fn(); } catch (e: any) { return { id, name, status: 'unknown', detail: e.message, risk: 'medium' }; }
 }
 
-export function checkHWID(): PrivCheck {
-  return safe('priv-hwid', 'Hardware ID Exposure', () => {
-    const out = ps(`$id=(Get-CimInstance Win32_ComputerSystemProduct).UUID;"UUID:$id"`);
+export async function checkHWID(): Promise<PrivCheck> {
+  return safe('priv-hwid', 'Hardware ID Exposure', async () => {
+    const out = await ps(`$id=(Get-CimInstance Win32_ComputerSystemProduct).UUID;"UUID:$id"`);
     return { id: 'priv-hwid', name: 'Hardware ID Exposure', status: 'warn', detail: `${out} — visible to apps`, risk: 'medium' };
   });
 }
 
-export function checkAdID(): PrivCheck {
-  return safe('priv-adid', 'Advertising ID', () => {
-    const out = ps(`$a=(Get-ItemProperty 'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AdvertisingInfo' -EA SilentlyContinue).Enabled;if($a-eq0){'DISABLED'}else{'ENABLED'}`);
+export async function checkAdID(): Promise<PrivCheck> {
+  return safe('priv-adid', 'Advertising ID', async () => {
+    const out = await ps(`$a=(Get-ItemProperty 'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AdvertisingInfo' -EA SilentlyContinue).Enabled;if($a-eq0){'DISABLED'}else{'ENABLED'}`);
     const ok = out.includes('DISABLED');
     return { id: 'priv-adid', name: 'Advertising ID', status: ok ? 'pass' : 'warn', detail: ok ? 'Ad ID disabled' : 'Ad ID active — tracking possible', risk: ok ? 'low' : 'medium', actionable: true };
   });
 }
 
-export function checkTelemetryRegistry(): PrivCheck {
-  return safe('priv-telemetry', 'Telemetry Registry', () => {
-    const out = ps(`
+export async function checkTelemetryRegistry(): Promise<PrivCheck> {
+  return safe('priv-telemetry', 'Telemetry Registry', async () => {
+    const out = await ps(`
 $t=(Get-ItemProperty 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\DataCollection' -EA SilentlyContinue).AllowTelemetry
 $dt=(Get-Service DiagTrack -EA SilentlyContinue).Status
 $dm=(Get-Service dmwappushservice -EA SilentlyContinue).Status
@@ -57,9 +59,9 @@ $dm=(Get-Service dmwappushservice -EA SilentlyContinue).Status
   });
 }
 
-export function checkWebcamMic(): PrivCheck {
-  return safe('priv-cammic', 'Webcam / Mic Lock', () => {
-    const out = ps(`
+export async function checkWebcamMic(): Promise<PrivCheck> {
+  return safe('priv-cammic', 'Webcam / Mic Lock', async () => {
+    const out = await ps(`
 $cam=(Get-ItemProperty 'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\CapabilityAccessManager\\ConsentStore\\webcam' -EA SilentlyContinue).Value
 $mic=(Get-ItemProperty 'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\CapabilityAccessManager\\ConsentStore\\microphone' -EA SilentlyContinue).Value
 "Webcam:$cam|Mic:$mic"
@@ -70,9 +72,9 @@ $mic=(Get-ItemProperty 'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Cap
   });
 }
 
-export function checkClipboard(): PrivCheck {
-  return safe('priv-clipboard', 'Clipboard History', () => {
-    const out = ps(`$c=(Get-ItemProperty 'HKCU:\\SOFTWARE\\Microsoft\\Clipboard' -EA SilentlyContinue).EnableClipboardHistory;if($c-eq0){'DISABLED'}else{'ENABLED'}`);
+export async function checkClipboard(): Promise<PrivCheck> {
+  return safe('priv-clipboard', 'Clipboard History', async () => {
+    const out = await ps(`$c=(Get-ItemProperty 'HKCU:\\SOFTWARE\\Microsoft\\Clipboard' -EA SilentlyContinue).EnableClipboardHistory;if($c-eq0){'DISABLED'}else{'ENABLED'}`);
     const ok = out.includes('DISABLED');
     return { id: 'priv-clipboard', name: 'Clipboard History', status: ok ? 'pass' : 'warn', detail: ok ? 'Clipboard history disabled' : 'Clipboard history active — data exposure risk', risk: ok ? 'low' : 'medium', actionable: true };
   });
@@ -82,9 +84,9 @@ export function checkMetadata(): PrivCheck {
   return { id: 'priv-metadata', name: 'Metadata Stripper', status: 'pass', detail: 'Available via Vault module file operations', risk: 'low' };
 }
 
-export function checkCortana(): PrivCheck {
-  return safe('priv-cortana', 'Cortana / Search', () => {
-    const out = ps(`
+export async function checkCortana(): Promise<PrivCheck> {
+  return safe('priv-cortana', 'Cortana / Search', async () => {
+    const out = await ps(`
 $c=(Get-ItemProperty 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\Windows Search' -EA SilentlyContinue).AllowCortana
 $ws=(Get-ItemProperty 'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Search' -EA SilentlyContinue).BingSearchEnabled
 "Cortana:$c|BingSearch:$ws"
@@ -95,32 +97,32 @@ $ws=(Get-ItemProperty 'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Sear
   });
 }
 
-export function checkErrorReporting(): PrivCheck {
-  return safe('priv-wer', 'Error Reporting', () => {
-    const out = ps(`$w=(Get-Service WerSvc -EA SilentlyContinue).Status;$d=(Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting' -EA SilentlyContinue).Disabled;"WerSvc:$w|Disabled:$d"`);
+export async function checkErrorReporting(): Promise<PrivCheck> {
+  return safe('priv-wer', 'Error Reporting', async () => {
+    const out = await ps(`$w=(Get-Service WerSvc -EA SilentlyContinue).Status;$d=(Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting' -EA SilentlyContinue).Disabled;"WerSvc:$w|Disabled:$d"`);
     const off = out.includes('Disabled:1') || out.includes('WerSvc:Stopped');
     return { id: 'priv-wer', name: 'Error Reporting', status: off ? 'pass' : 'warn', detail: out, risk: off ? 'low' : 'medium', actionable: true };
   });
 }
 
-export function checkWifiSense(): PrivCheck {
-  return safe('priv-wifisense', 'WiFi Sense', () => {
-    const out = ps(`$w=(Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\WcmSvc\\wifinetworkmanager\\config' -EA SilentlyContinue).AutoConnectAllowedOEM;if($w-eq0){'DISABLED'}else{'ENABLED'}`);
+export async function checkWifiSense(): Promise<PrivCheck> {
+  return safe('priv-wifisense', 'WiFi Sense', async () => {
+    const out = await ps(`$w=(Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\WcmSvc\\wifinetworkmanager\\config' -EA SilentlyContinue).AutoConnectAllowedOEM;if($w-eq0){'DISABLED'}else{'ENABLED'}`);
     const ok = out.includes('DISABLED');
     return { id: 'priv-wifisense', name: 'WiFi Sense', status: ok ? 'pass' : 'warn', detail: out, risk: ok ? 'low' : 'medium', actionable: true };
   });
 }
 
-export function checkBluetooth(): PrivCheck {
-  return safe('priv-bluetooth', 'Bluetooth Protection', () => {
-    const out = ps(`$bt=Get-Service bthserv -EA SilentlyContinue;"Bluetooth:$($bt.Status)|StartType:$($bt.StartType)"`);
+export async function checkBluetooth(): Promise<PrivCheck> {
+  return safe('priv-bluetooth', 'Bluetooth Protection', async () => {
+    const out = await ps(`$bt=Get-Service bthserv -EA SilentlyContinue;"Bluetooth:$($bt.Status)|StartType:$($bt.StartType)"`);
     return { id: 'priv-bluetooth', name: 'Bluetooth Status', status: 'pass', detail: out, risk: 'low', actionable: true };
   });
 }
 
-export function checkGPOHardening(): PrivCheck {
-  return safe('priv-gpo', 'GPO Hardening', () => {
-    const out = ps(`
+export async function checkGPOHardening(): Promise<PrivCheck> {
+  return safe('priv-gpo', 'GPO Hardening', async () => {
+    const out = await ps(`
 $checks=0;$passed=0
 $checks++;$v=(Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System' -EA SilentlyContinue).EnableLUA;if($v-eq1){$passed++}
 $checks++;$v=(Get-ItemProperty 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\Installer' -EA SilentlyContinue).AlwaysInstallElevated;if($v-ne1){$passed++}
@@ -136,9 +138,9 @@ $checks++;$v=(Get-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Services\\Lanm
   });
 }
 
-export function checkUACStealth(): PrivCheck {
-  return safe('priv-uac', 'UAC Stealth Mode', () => {
-    const out = ps(`
+export async function checkUACStealth(): Promise<PrivCheck> {
+  return safe('priv-uac', 'UAC Stealth Mode', async () => {
+    const out = await ps(`
 $u=Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System' -EA SilentlyContinue
 "LUA:$($u.EnableLUA)|Consent:$($u.ConsentPromptBehaviorAdmin)|SecureDesktop:$($u.PromptOnSecureDesktop)"
 `);
@@ -151,17 +153,17 @@ export function checkShredder(): PrivCheck {
   return { id: 'priv-shredder', name: 'Military Shredder', status: 'pass', detail: 'Available via Vault file shredder (DoD 5220.22-M)', risk: 'low' };
 }
 
-export function checkAntiKeylogging(): PrivCheck {
-  return safe('priv-antikeylog', 'Anti-Keylogging', () => {
-    const out = ps(`$f=(Get-ItemProperty 'HKCU:\\SOFTWARE\\Microsoft\\Input\\TIPC' -EA SilentlyContinue).Enabled;if($f-eq0){'TYPING_DATA_OFF'}else{'TYPING_DATA_ON'}`);
+export async function checkAntiKeylogging(): Promise<PrivCheck> {
+  return safe('priv-antikeylog', 'Anti-Keylogging', async () => {
+    const out = await ps(`$f=(Get-ItemProperty 'HKCU:\\SOFTWARE\\Microsoft\\Input\\TIPC' -EA SilentlyContinue).Enabled;if($f-eq0){'TYPING_DATA_OFF'}else{'TYPING_DATA_ON'}`);
     const ok = out.includes('OFF');
     return { id: 'priv-antikeylog', name: 'Anti-Keylogging', status: ok ? 'pass' : 'warn', detail: ok ? 'Typing data collection disabled' : 'Typing data sent to Microsoft', risk: ok ? 'low' : 'medium', actionable: true };
   });
 }
 
-export function checkBrowserFingerprint(): PrivCheck {
-  return safe('priv-fingerprint', 'Browser Fingerprint', () => {
-    const out = ps(`$dnt=(Get-ItemProperty 'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced' -EA SilentlyContinue).Start_TrackProgs;if($dnt-eq0){'TRACKING_OFF'}else{'TRACKING_ON'}`);
+export async function checkBrowserFingerprint(): Promise<PrivCheck> {
+  return safe('priv-fingerprint', 'Browser Fingerprint', async () => {
+    const out = await ps(`$dnt=(Get-ItemProperty 'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced' -EA SilentlyContinue).Start_TrackProgs;if($dnt-eq0){'TRACKING_OFF'}else{'TRACKING_ON'}`);
     return { id: 'priv-fingerprint', name: 'Tracking Protection', status: out.includes('OFF') ? 'pass' : 'warn', detail: out, risk: out.includes('OFF') ? 'low' : 'medium', actionable: true };
   });
 }
@@ -174,9 +176,9 @@ const KNOWN_VPN_DNS: Record<string, string[]> = {
   Surfshark: ['162.252.172.57', '149.154.159.92'],
 };
 
-export function checkDNSLeak(): PrivCheck {
-  return safe('priv-dnsleak', 'DNS Leak Protection', () => {
-    const dnsOut = ps(`
+export async function checkDNSLeak(): Promise<PrivCheck> {
+  return safe('priv-dnsleak', 'DNS Leak Protection', async () => {
+    const dnsOut = await ps(`
 $dns=Get-DnsClientServerAddress -AddressFamily IPv4|?{$_.ServerAddresses.Count-gt0}|Select -First 1 -Expand ServerAddresses
 $vpn=Get-NetAdapter|?{$_.InterfaceDescription-match'NordLynx|NordVPN|WireGuard|TAP-|TUN|OpenVPN|Surfshark|Mullvad|ProtonVPN|ExpressVPN' -and $_.Status-eq'Up'}|Select -First 1 -Expand InterfaceDescription -EA SilentlyContinue
 $known=@('1.1.1.1','8.8.8.8','9.9.9.9','208.67.222.222')
@@ -231,32 +233,32 @@ $secure=$false;foreach($s in $dns){if($known-contains$s){$secure=$true}}
   });
 }
 
-export function checkLocation(): PrivCheck {
-  return safe('priv-location', 'Location Services', () => {
-    const out = ps(`$l=(Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\CapabilityAccessManager\\ConsentStore\\location' -EA SilentlyContinue).Value;if($l-eq'Deny'){'DISABLED'}else{'ENABLED'}`);
+export async function checkLocation(): Promise<PrivCheck> {
+  return safe('priv-location', 'Location Services', async () => {
+    const out = await ps(`$l=(Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\CapabilityAccessManager\\ConsentStore\\location' -EA SilentlyContinue).Value;if($l-eq'Deny'){'DISABLED'}else{'ENABLED'}`);
     const ok = out.includes('DISABLED');
     return { id: 'priv-location', name: 'Location Services', status: ok ? 'pass' : 'warn', detail: ok ? 'Location disabled' : 'Location services active', risk: ok ? 'low' : 'medium', actionable: true };
   });
 }
 
-export function checkWinget(): PrivCheck {
-  return safe('priv-winget', 'Auto App Update (Winget)', () => {
-    const out = ps(`$w=Get-Command winget -EA SilentlyContinue;if($w){'AVAILABLE'}else{'NOT_FOUND'}`);
+export async function checkWinget(): Promise<PrivCheck> {
+  return safe('priv-winget', 'Auto App Update (Winget)', async () => {
+    const out = await ps(`$w=Get-Command winget -EA SilentlyContinue;if($w){'AVAILABLE'}else{'NOT_FOUND'}`);
     return { id: 'priv-winget', name: 'Winget Available', status: out.includes('AVAILABLE') ? 'pass' : 'warn', detail: out, risk: 'low' };
   });
 }
 
-export function checkUSBLock(): PrivCheck {
-  return safe('priv-usb', 'USB Port Lock', () => {
-    const out = ps(`$u=(Get-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Services\\USBSTOR' -EA SilentlyContinue).Start;if($u-eq4){'DISABLED'}else{'ENABLED'}`);
+export async function checkUSBLock(): Promise<PrivCheck> {
+  return safe('priv-usb', 'USB Port Lock', async () => {
+    const out = await ps(`$u=(Get-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Services\\USBSTOR' -EA SilentlyContinue).Start;if($u-eq4){'DISABLED'}else{'ENABLED'}`);
     const locked = out.includes('DISABLED');
     return { id: 'priv-usb', name: 'USB Storage', status: locked ? 'pass' : 'warn', detail: locked ? 'USB storage disabled' : 'USB storage enabled — BadUSB risk', risk: locked ? 'low' : 'medium', actionable: true };
   });
 }
 
-export function checkLockscreen(): PrivCheck {
-  return safe('priv-lockscreen', 'Lockscreen Hardening', () => {
-    const out = ps(`
+export async function checkLockscreen(): Promise<PrivCheck> {
+  return safe('priv-lockscreen', 'Lockscreen Hardening', async () => {
+    const out = await ps(`
 $cam=(Get-ItemProperty 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\Personalization' -EA SilentlyContinue).NoLockScreenCamera
 $cortana=(Get-ItemProperty 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\Windows Search' -EA SilentlyContinue).AllowCortanaAboveLock
 "LockCam:$cam|LockCortana:$cortana"
@@ -266,9 +268,9 @@ $cortana=(Get-ItemProperty 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\Windo
   });
 }
 
-export function checkShellExtensions(): PrivCheck {
-  return safe('priv-shellext', 'Shell Extension Audit', () => {
-    const out = ps(`
+export async function checkShellExtensions(): Promise<PrivCheck> {
+  return safe('priv-shellext', 'Shell Extension Audit', async () => {
+    const out = await ps(`
 $ErrorActionPreference='SilentlyContinue'
 $ext=Get-ChildItem 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Shell Extensions\\Approved' -EA SilentlyContinue
 $c=if($ext){$ext.Count}else{0}
@@ -282,13 +284,21 @@ export function checkDataDashboard(): PrivCheck {
   return { id: 'priv-dashboard', name: 'Data Science Dashboard', status: 'pass', detail: 'Integrated into Sentinel Connector Map', risk: 'low' };
 }
 
-export function runAllPrivacyChecks(): PrivCheck[] {
-  return [
-    checkHWID(), checkAdID(), checkTelemetryRegistry(), checkWebcamMic(),
-    checkClipboard(), checkMetadata(), checkCortana(), checkErrorReporting(),
-    checkWifiSense(), checkBluetooth(), checkGPOHardening(), checkUACStealth(),
-    checkShredder(), checkAntiKeylogging(), checkBrowserFingerprint(),
-    checkDNSLeak(), checkLocation(), checkWinget(), checkUSBLock(),
-    checkLockscreen(), checkShellExtensions(), checkDataDashboard(),
+const _yield = () => new Promise<void>(r => setImmediate(r));
+
+export async function runAllPrivacyChecks(): Promise<PrivCheck[]> {
+  const fns: (() => Promise<PrivCheck> | PrivCheck)[] = [
+    checkHWID, checkAdID, checkTelemetryRegistry, checkWebcamMic,
+    checkClipboard, checkMetadata, checkCortana, checkErrorReporting,
+    checkWifiSense, checkBluetooth, checkGPOHardening, checkUACStealth,
+    checkShredder, checkAntiKeylogging, checkBrowserFingerprint,
+    checkDNSLeak, checkLocation, checkWinget, checkUSBLock,
+    checkLockscreen, checkShellExtensions, checkDataDashboard,
   ];
+  const results: PrivCheck[] = [];
+  for (const fn of fns) {
+    results.push(await fn());
+    await _yield();
+  }
+  return results;
 }

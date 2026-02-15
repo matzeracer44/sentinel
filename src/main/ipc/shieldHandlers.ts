@@ -1,7 +1,14 @@
 import { ipcMain } from 'electron';
-import { execSync } from 'child_process';
+import { exec, execFile } from 'child_process';
+import { promisify } from 'util';
+const execAsync = promisify(exec);
+async function runShellCmd(cmd: string, opts: Record<string, any> = {}): Promise<string> {
+  const { stdout } = await execAsync(cmd, { encoding: 'utf8', windowsHide: true, timeout: 10000, ...opts });
+  return (stdout || '').trim();
+}
 import * as os from 'os';
 import { addActivityLog } from '../services/activityLog';
+import { sanitizeShellArg, validateIPForShell } from '../../shared/utils';
 import {
   testInternet,
   safeBlockPort,
@@ -142,18 +149,16 @@ const mapFirewallRecords = (records: any[]): SentinelFirewallRule[] =>
     timeCreated: rule?.TimeCreated || null,
   }));
 
-const fetchRulesFromTrackedNames = (): SentinelFirewallRule[] => {
+const fetchRulesFromTrackedNames = async (): Promise<SentinelFirewallRule[]> => {
   const trackedNames = getSentinelRules();
   if (!trackedNames?.length) return [];
 
   const collected: SentinelFirewallRule[] = [];
   for (const rawName of trackedNames) {
     try {
-      const escaped = rawName.replace(/"/g, '\\"');
-      const output = execSync(`netsh advfirewall firewall show rule name="${escaped}"`, {
-        encoding: 'utf-8',
-        windowsHide: true,
-      });
+      const safeName = sanitizeShellArg(rawName);
+      if (!safeName) continue;
+      const output = await runShellCmd(`netsh advfirewall firewall show rule name="${safeName}"`);
       collected.push(...parseNetshRuleBlocks(output));
     } catch (err) {
       console.warn('[Firewall] Unable to describe tracked rule', rawName, err);
@@ -174,7 +179,7 @@ const dedupeFirewallRules = (rules: SentinelFirewallRule[]): SentinelFirewallRul
   return Array.from(map.values());
 };
 
-const fetchSentinelRulesViaPowerShell = (): SentinelFirewallRule[] => {
+const fetchSentinelRulesViaPowerShell = async (): Promise<SentinelFirewallRule[]> => {
   try {
     const psCommand = `powershell -ExecutionPolicy Bypass -NoProfile -Command "
 $ErrorActionPreference = 'Stop'
@@ -190,10 +195,7 @@ $rules = Show-NetFirewallRule -PolicyStore ActiveStore -Detailed |
 $rules | ConvertTo-Json -Depth 4
 "`;
 
-    const output = execSync(psCommand, {
-      encoding: 'utf-8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    const output = await runShellCmd(psCommand, { timeout: 15000 });
 
     let parsed = JSON.parse(output || '[]');
     if (!Array.isArray(parsed)) {
@@ -214,7 +216,7 @@ const FIREWALL_ENUM_CMD_OPTS = {
   windowsHide: true,
 };
 
-export const aggregateFirewallRules = (): FirewallAggregationReport => {
+export const aggregateFirewallRules = async (): Promise<FirewallAggregationReport> => {
   const aggregated: SentinelFirewallRule[] = [];
   const errors: string[] = [];
   let powershellRuleCount = 0;
@@ -249,7 +251,7 @@ foreach ($rule in $rules) {
 }
 $list | ConvertTo-Json -Depth 4
 "`;
-    const output = execSync(psCommand, FIREWALL_ENUM_CMD_OPTS);
+    const output = await runShellCmd(psCommand, { timeout: (FIREWALL_ENUM_CMD_OPTS as any).timeout || 30000, maxBuffer: (FIREWALL_ENUM_CMD_OPTS as any).maxBuffer || 20 * 1024 * 1024 });
     let parsed = JSON.parse(output || '[]');
     if (!Array.isArray(parsed)) {
       parsed = parsed ? [parsed] : [];
@@ -263,13 +265,13 @@ $list | ConvertTo-Json -Depth 4
     console.error('[Firewall] Get-NetFirewallRule failed, attempting netsh fallback:', err);
   }
 
-  const sentinelRules = fetchSentinelRulesViaPowerShell();
+  const sentinelRules = await fetchSentinelRulesViaPowerShell();
   const sentinelTagged = sentinelRules.length;
   if (sentinelTagged) {
     aggregated.push(...sentinelRules);
   }
 
-  const trackedRules = fetchRulesFromTrackedNames();
+  const trackedRules = await fetchRulesFromTrackedNames();
   const tracked = trackedRules.length;
   if (tracked) {
     aggregated.push(...trackedRules);
@@ -280,7 +282,7 @@ $list | ConvertTo-Json -Depth 4
 
   if (!finalRules.length) {
     try {
-      const fallbackOutput = execSync('netsh advfirewall firewall show rule name=all', FIREWALL_ENUM_CMD_OPTS);
+      const fallbackOutput = await runShellCmd('netsh advfirewall firewall show rule name=all', { timeout: (FIREWALL_ENUM_CMD_OPTS as any).timeout || 30000, maxBuffer: (FIREWALL_ENUM_CMD_OPTS as any).maxBuffer || 20 * 1024 * 1024 });
       finalRules = parseNetshRuleBlocks(fallbackOutput);
       fallbackUsed = true;
     } catch (fallbackErr) {
@@ -342,10 +344,10 @@ export const registerShieldHandlers = () => {
       // Real disk usage via PowerShell
       let diskPercent = -1;
       try {
-        const diskOut = execSync(
+        const diskOut = await runShellCmd(
           'powershell -NoProfile -Command "(Get-PSDrive C).Used / ((Get-PSDrive C).Used + (Get-PSDrive C).Free) * 100"',
-          { encoding: 'utf-8', timeout: 5000, windowsHide: true }
-        ).trim();
+          { timeout: 5000 }
+        );
         diskPercent = Math.round(parseFloat(diskOut));
         if (isNaN(diskPercent)) diskPercent = -1;
       } catch { diskPercent = -1; }
@@ -386,20 +388,23 @@ export const registerShieldHandlers = () => {
   ipcMain.handle('shield-get-processes', async () => {
     try {
       const { getProcessKillRisk } = await import('../../shared/constants');
-      const psScript = `Get-Process | Where-Object { $_.Id -gt 0 } | ForEach-Object {
-        [PSCustomObject]@{
-          PID=$_.Id; Name=$_.ProcessName;
-          CPUms=[math]::Round($_.TotalProcessorTime.TotalMilliseconds);
-          RamMB=[math]::Round($_.WorkingSet64/1MB,1);
-          Threads=$_.Threads.Count; Handles=$_.HandleCount;
-          Path=if($_.Path){$_.Path}else{$null};
-          Description=if($_.Description){$_.Description}else{$null};
-          Company=if($_.Company){$_.Company}else{$null};
-          StartTime=if($_.StartTime){$_.StartTime.ToString('o')}else{$null}
-        }
-      } | ConvertTo-Json -Compress`;
-      const raw = execSync(`powershell.exe -NoProfile -ExecutionPolicy Bypass -Command -`, {
-        input: psScript, encoding: 'utf-8', windowsHide: true, timeout: 12000,
+      const psScript = `$ErrorActionPreference='SilentlyContinue'
+Get-Process | Where-Object { $_.Id -gt 0 } | ForEach-Object {
+  $cpuMs=0; try{$cpuMs=[math]::Round($_.TotalProcessorTime.TotalMilliseconds)}catch{}
+  $ramMB=0; try{$ramMB=[math]::Round($_.WorkingSet64/1MB,1)}catch{}
+  $tc=0; try{$tc=$_.Threads.Count}catch{}
+  $hc=0; try{$hc=$_.HandleCount}catch{}
+  $pp=$null; try{if($_.Path){$pp=$_.Path}}catch{}
+  $dd=$null; try{if($_.Description){$dd=$_.Description}}catch{}
+  $cc=$null; try{if($_.Company){$cc=$_.Company}}catch{}
+  $st=$null; try{if($_.StartTime){$st=$_.StartTime.ToString('o')}}catch{}
+  [PSCustomObject]@{PID=$_.Id;Name=$_.ProcessName;CPUms=$cpuMs;RamMB=$ramMB;Threads=$tc;Handles=$hc;Path=$pp;Description=$dd;Company=$cc;StartTime=$st}
+} | ConvertTo-Json -Compress`;
+      const encoded = Buffer.from(psScript, 'utf16le').toString('base64');
+      const raw = await new Promise<string>((resolve, reject) => {
+        execFile('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded],
+          { encoding: 'utf-8', windowsHide: true, timeout: 12000, maxBuffer: 10 * 1024 * 1024 },
+          (err, stdout) => err ? reject(err) : resolve(stdout));
       });
       let parsed = JSON.parse((raw || '[]').trim());
       if (!Array.isArray(parsed)) parsed = parsed ? [parsed] : [];
@@ -476,7 +481,7 @@ export const registerShieldHandlers = () => {
    */
   ipcMain.handle('shield-get-firewall-rules', async () => {
     try {
-      const aggregation = aggregateFirewallRules();
+      const aggregation = await aggregateFirewallRules();
       return { success: true, rules: aggregation.rules, meta: aggregation.meta };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -486,7 +491,7 @@ export const registerShieldHandlers = () => {
 
   ipcMain.handle('shield-get-firewall-inventory', async () => {
     try {
-      const aggregation = aggregateFirewallRules();
+      const aggregation = await aggregateFirewallRules();
       let blockedIps: IPBlockInfo[] = [];
       let blockedIpsError: string | null = null;
 
@@ -628,27 +633,27 @@ export const registerShieldHandlers = () => {
       return { success: false, error: 'Invalid rule name' };
     }
     try {
-      // Escape for PowerShell single-quote context (double any single quotes)
-      const escaped = ruleName.replace(/'/g, "''");
+      // Sanitize for shell injection prevention
+      const safeName = sanitizeShellArg(ruleName);
+      if (!safeName) return { success: false, error: 'Rule name contains invalid characters' };
 
       // Try PowerShell Remove-NetFirewallRule first (handles special chars better)
       try {
-        execSync(
-          `powershell -NoProfile -ExecutionPolicy Bypass -Command "Remove-NetFirewallRule -DisplayName '${escaped}' -ErrorAction Stop"`,
-          { timeout: 10000, windowsHide: true }
+        await runShellCmd(
+          `powershell -NoProfile -ExecutionPolicy Bypass -Command "Remove-NetFirewallRule -DisplayName '${safeName}' -ErrorAction Stop"`,
+          { timeout: 10000 }
         );
       } catch {
-        // Fallback: netsh with escaped double-quotes
-        const netshEscaped = ruleName.replace(/"/g, '\\"');
-        execSync(`netsh advfirewall firewall delete rule name="${netshEscaped}"`, { timeout: 10000, windowsHide: true });
+        // Fallback: netsh
+        await runShellCmd(`netsh advfirewall firewall delete rule name="${safeName}"`, { timeout: 10000 });
       }
 
       // Verify deletion
       try {
-        const check = execSync(
-          `powershell -NoProfile -ExecutionPolicy Bypass -Command "(Get-NetFirewallRule -DisplayName '${escaped}' -ErrorAction SilentlyContinue) -ne $null"`,
-          { timeout: 5000, windowsHide: true, encoding: 'utf8' }
-        ).trim();
+        const check = await runShellCmd(
+          `powershell -NoProfile -ExecutionPolicy Bypass -Command "(Get-NetFirewallRule -DisplayName '${safeName}' -ErrorAction SilentlyContinue) -ne $null"`,
+          { timeout: 5000 }
+        );
         if (check === 'True') {
           return { success: false, error: `Rule "${ruleName}" still exists after delete attempt` };
         }
@@ -835,8 +840,10 @@ $result | ConvertTo-Json -Depth 10
         try {
           // Try to resolve hostname
           try {
-            const hostnameCmd = `powershell -Command "Resolve-DnsName -Name ${ip} -Type PTR -ErrorAction SilentlyContinue | Select-Object -ExpandProperty NameHost"`;
-            hostname = execSync(hostnameCmd, { timeout: 3000 }).toString().trim();
+            const safeIp = validateIPForShell(ip);
+            if (!safeIp) throw new Error('Invalid IP for DNS resolution');
+            const hostnameCmd = `powershell -NoProfile -Command "Resolve-DnsName -Name ${safeIp} -Type PTR -ErrorAction SilentlyContinue | Select-Object -ExpandProperty NameHost"`;
+            hostname = await runShellCmd(hostnameCmd, { timeout: 3000 });
             if (!hostname) hostname = 'Unknown';
           } catch {
             hostname = 'Unknown';
@@ -844,8 +851,10 @@ $result | ConvertTo-Json -Depth 10
           
           // Get MAC address from ARP table
           try {
-            const arpCmd = `arp -a ${ip}`;
-            const arpOutput = execSync(arpCmd, { timeout: 2000 }).toString();
+            const safeArpIp = validateIPForShell(ip);
+            if (!safeArpIp) throw new Error('Invalid IP for ARP lookup');
+            const arpCmd = `arp -a ${safeArpIp}`;
+            const arpOutput = await runShellCmd(arpCmd, { timeout: 2000 });
             const macMatch = arpOutput.match(/([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})/);
             if (macMatch) {
               macAddress = macMatch[0].toUpperCase().replace(/-/g, ':');

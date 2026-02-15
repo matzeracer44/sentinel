@@ -196,20 +196,24 @@ export function registerIntelHandlers(): void {
   });
 
   // ─── ARGUS URL Scanning ───
-  ipcMain.handle(IPC.INTEL.URL_SCAN, async (_event, url: string) => {
+  ipcMain.handle(IPC.INTEL.URL_SCAN, async (_event, urlOrOpts: string | { url: string; deepFetch?: boolean }) => {
     try {
+      const url = typeof urlOrOpts === 'string' ? urlOrOpts : urlOrOpts?.url;
+      const deepFetch = typeof urlOrOpts === 'object' ? !!urlOrOpts.deepFetch : false;
       if (!url || typeof url !== 'string') return { success: false, error: 'URL is required' };
-      const result = await getArgusManager().scanUrl(url);
+      const result = await getArgusManager().scanUrl(url, false, deepFetch);
       return { success: true, data: result };
     } catch (err) {
       return { success: false, error: serializeError(err) };
     }
   });
 
-  ipcMain.handle(IPC.INTEL.BATCH_SCAN, async (_event, urls: string[]) => {
+  ipcMain.handle(IPC.INTEL.BATCH_SCAN, async (_event, payload: string[] | { urls: string[]; deepFetch?: boolean }) => {
     try {
+      const urls = Array.isArray(payload) ? payload : payload?.urls;
+      const deepFetch = !Array.isArray(payload) && payload ? !!payload.deepFetch : false;
       if (!Array.isArray(urls) || urls.length === 0) return { success: false, error: 'URLs array is required' };
-      const result = await getArgusManager().batchScan(urls);
+      const result = await getArgusManager().batchScan(urls, deepFetch);
       return { success: true, data: result };
     } catch (err) {
       return { success: false, error: serializeError(err) };

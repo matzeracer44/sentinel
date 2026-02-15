@@ -1,13 +1,16 @@
-import { execSync } from 'child_process';
+import { exec } from 'child_process';
+import { promisify } from 'util';
 import { getExecOptions } from './execOptions';
 
-/**
- * Helper function to execute PowerShell commands with proper error handling
- */
-function execPowerShell(command: string): string {
+const execAsync = promisify(exec);
+
+async function execPowerShell(command: string): Promise<string> {
   try {
-    const fullCommand = `powershell -ExecutionPolicy Bypass -NoProfile -Command "${command}"`;
-    return execSync(fullCommand, getExecOptions()).toString().trim();
+    const opts = getExecOptions();
+    const { stdout } = await execAsync(`powershell -ExecutionPolicy Bypass -NoProfile -Command "${command}"`, {
+      timeout: opts.timeout, maxBuffer: opts.maxBuffer, encoding: 'utf8', windowsHide: true,
+    });
+    return (stdout || '').trim();
   } catch (error: any) {
     console.error('PowerShell execution error:', error.message);
     return '';
@@ -193,7 +196,7 @@ export const TWEAKS: RegistryTweak[] = [
 export async function getTweakStatus(tweak: RegistryTweak): Promise<TweakStatus> {
   try {
     const cmd = `(Get-ItemProperty -Path "${tweak.path}" -Name "${tweak.key}" -ErrorAction SilentlyContinue).${tweak.key}`;
-    const currentValue = execPowerShell(cmd);
+    const currentValue = await execPowerShell(cmd);
 
     const isEnabled = currentValue === String(tweak.enabledValue);
 
@@ -236,11 +239,11 @@ export async function applyTweak(tweakId: string, enable: boolean): Promise<bool
 
     // Create registry path if it doesn't exist
     const createPathCmd = `New-Item -Path "${tweak.path}" -Force -ErrorAction SilentlyContinue | Out-Null`;
-    execPowerShell(createPathCmd);
+    await execPowerShell(createPathCmd);
 
     // Set registry value
     const setValueCmd = `Set-ItemProperty -Path "${tweak.path}" -Name "${tweak.key}" -Value ${value} -Type ${valueType} -Force`;
-    execPowerShell(setValueCmd);
+    await execPowerShell(setValueCmd);
 
     console.log(`✓ Tweak ${tweakId} ${enable ? 'enabled' : 'disabled'}`);
     return true;

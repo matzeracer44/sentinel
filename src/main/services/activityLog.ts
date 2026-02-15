@@ -260,28 +260,28 @@ export function enableAutoActivityLogging(levels: ('error'|'warn'|'info'|'log')[
 
   if (levels.includes('error')) {
     console.error = (...args: any[]) => {
-      try { addActivityLog('Console', 'error', args.map(String).join(' '), 'error'); } catch {}
+      try { addActivityLog('Console', 'error', args.map(String).join(' '), 'error'); } catch { /* must not log here — prevents infinite recursion */ }
       _originalConsole.error.apply(console, args);
     };
   }
 
   if (levels.includes('warn')) {
     console.warn = (...args: any[]) => {
-      try { addActivityLog('Console', 'warn', args.map(String).join(' '), 'warning'); } catch {}
+      try { addActivityLog('Console', 'warn', args.map(String).join(' '), 'warning'); } catch { /* must not log here — prevents infinite recursion */ }
       _originalConsole.warn.apply(console, args);
     };
   }
 
   if (levels.includes('info')) {
     console.info = (...args: any[]) => {
-      try { addActivityLog('Console', 'info', args.map(String).join(' '), 'info'); } catch {}
+      try { addActivityLog('Console', 'info', args.map(String).join(' '), 'info'); } catch { /* must not log here — prevents infinite recursion */ }
       _originalConsole.info.apply(console, args);
     };
   }
 
   if (levels.includes('log')) {
     console.log = (...args: any[]) => {
-      try { addActivityLog('Console', 'log', args.map(String).join(' '), 'info'); } catch {}
+      try { addActivityLog('Console', 'log', args.map(String).join(' '), 'info'); } catch { /* must not log here — prevents infinite recursion */ }
       _originalConsole.log.apply(console, args);
     };
   }

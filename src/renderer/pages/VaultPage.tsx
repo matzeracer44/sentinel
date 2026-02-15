@@ -7,6 +7,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { notify } from '../components/Common/SentinelNotification';
+import { useTranslation } from 'react-i18next';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const api = (): any => (window as any).electronAPI;
@@ -22,6 +23,7 @@ interface CryptoResult {
 }
 
 const VaultPage: React.FC = () => {
+  const { t } = useTranslation();
   const [tab, setTab] = useState<Tab>('encrypt');
   const [argusOnline, setArgusOnline] = useState<boolean | null>(null);
   const [plaintext, setPlaintext] = useState('');
@@ -179,12 +181,12 @@ const VaultPage: React.FC = () => {
     } catch (e: any) { notify.error(e?.message || 'Delete failed'); }
   };
 
-  const TABS: { key: Tab; label: string; count?: number }[] = [
-    { key: 'encrypt', label: 'Encrypt / Decrypt' },
-    { key: 'notes', label: 'Secure Notes', count: notes.length || undefined },
-    { key: 'passwords', label: 'Password Generator' },
-    { key: 'shredder', label: 'File Shredder' },
-    { key: 'config', label: 'Whitelist Config' },
+  const TABS: { key: Tab; labelKey: string; count?: number }[] = [
+    { key: 'encrypt', labelKey: 'vault.tabs.encryption' },
+    { key: 'notes', labelKey: 'vault.tabs.notes', count: notes.length || undefined },
+    { key: 'passwords', labelKey: 'vault.tabs.passwords' },
+    { key: 'shredder', labelKey: 'vault.tabs.shredder' },
+    { key: 'config', labelKey: 'vault.tabs.argus' },
   ];
 
   return (
@@ -192,10 +194,10 @@ const VaultPage: React.FC = () => {
       {/* ─── Spacy Header ─── */}
       <div className="s-page-header">
         <div className="s-tab-bar">
-          {TABS.map((t) => (
-            <button key={t.key} className={`s-tab ${tab === t.key ? 's-tab-active' : ''}`} onClick={() => { setTab(t.key); if (t.key === 'config') fetchConfig(); if (t.key === 'notes') fetchNotes(); if (t.key === 'shredder') fetchShredStats(); }}>
-              {t.label}
-              {t.count !== undefined && <span className="s-tab-badge">{t.count}</span>}
+          {TABS.map((tb) => (
+            <button key={tb.key} className={`s-tab ${tab === tb.key ? 's-tab-active' : ''}`} onClick={() => { setTab(tb.key); if (tb.key === 'config') fetchConfig(); if (tb.key === 'notes') fetchNotes(); if (tb.key === 'shredder') fetchShredStats(); }}>
+              {t(tb.labelKey)}
+              {tb.count !== undefined && <span className="s-tab-badge">{tb.count}</span>}
             </button>
           ))}
         </div>
@@ -212,7 +214,7 @@ const VaultPage: React.FC = () => {
             animation: argusOnline ? 'pulse-green 2s ease-in-out infinite' : 'none',
           }} />
           <span style={{ fontSize: '0.675rem', fontWeight: 600, color: argusOnline ? 'var(--s-green)' : argusOnline === false ? 'var(--s-amber)' : 'var(--s-text-dim)' }}>
-            {argusOnline ? 'ARGUS Online' : argusOnline === false ? 'Local Fallback' : 'Checking...'}
+            {argusOnline ? t('dashboard.argusOnline') : argusOnline === false ? t('dashboard.argusOffline') : t('common.loading')}
           </span>
         </div>
       </div>
@@ -230,19 +232,19 @@ const VaultPage: React.FC = () => {
           <motion.div key="encrypt" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
             <div className="s-card-spacy">
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
-                <span style={{ fontWeight: 700, fontSize: '0.9rem', fontFamily: 'var(--s-font-display)', background: 'linear-gradient(90deg, var(--s-cyan), var(--s-green))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>Encrypt</span>
+                <span style={{ fontWeight: 700, fontSize: '0.9rem', fontFamily: 'var(--s-font-display)', background: 'linear-gradient(90deg, var(--s-cyan), var(--s-green))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>{t('vault.encryption.encrypt')}</span>
                 <div className="s-section-divider" style={{ flex: 1 }} />
               </div>
-              <textarea className="s-input" rows={5} placeholder="Enter plaintext to encrypt..." value={plaintext} onChange={(e) => setPlaintext(e.target.value)} style={{ resize: 'vertical', marginBottom: 12 }} />
+              <textarea className="s-input" rows={5} placeholder={t('vault.argusEncryption.dataPlaceholder')} value={plaintext} onChange={(e) => setPlaintext(e.target.value)} style={{ resize: 'vertical', marginBottom: 12 }} />
               <button className="s-btn s-btn-primary" onClick={handleEncrypt} disabled={processing || !plaintext.trim()}>
-                {processing ? 'Encrypting...' : argusOnline ? '🔒 Encrypt via ARGUS' : '🔒 Encrypt (Local)'}
+                {processing ? t('common.loading') : `🔒 ${t('vault.encryption.encrypt')}`}
               </button>
               {encryptResult && (
                 <div style={{ marginTop: 12 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
                     {engineBadge(encryptResult.engine)}
                     {encryptResult.engine !== 'error' && (
-                      <button className="s-btn s-btn-ghost s-btn-sm" style={{ padding: '1px 6px', fontSize: '0.6rem' }} onClick={() => { navigator.clipboard.writeText(encryptResult.text); }}>Copy</button>
+                      <button className="s-btn s-btn-ghost s-btn-sm" style={{ padding: '1px 6px', fontSize: '0.6rem' }} onClick={() => { navigator.clipboard.writeText(encryptResult.text); }}>{t('common.copy')}</button>
                     )}
                   </div>
                   <div style={{ padding: 12, background: 'rgba(8,8,28,0.4)', borderRadius: 'var(--s-radius-sm)', fontFamily: 'var(--s-font-mono)', fontSize: '0.7rem', wordBreak: 'break-all', color: resultColor(encryptResult.engine), maxHeight: 150, overflowY: 'auto' }}>
@@ -254,12 +256,12 @@ const VaultPage: React.FC = () => {
 
             <div className="s-card-spacy">
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
-                <span style={{ fontWeight: 700, fontSize: '0.9rem', fontFamily: 'var(--s-font-display)', background: 'linear-gradient(90deg, var(--s-amber), var(--s-cyan))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>Decrypt</span>
+                <span style={{ fontWeight: 700, fontSize: '0.9rem', fontFamily: 'var(--s-font-display)', background: 'linear-gradient(90deg, var(--s-amber), var(--s-cyan))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>{t('vault.encryption.decrypt')}</span>
                 <div className="s-section-divider" style={{ flex: 1 }} />
               </div>
-              <textarea className="s-input" rows={5} placeholder="Enter ciphertext to decrypt..." value={ciphertext} onChange={(e) => setCiphertext(e.target.value)} style={{ resize: 'vertical', marginBottom: 12 }} />
+              <textarea className="s-input" rows={5} placeholder={t('vault.argusEncryption.dataPlaceholder')} value={ciphertext} onChange={(e) => setCiphertext(e.target.value)} style={{ resize: 'vertical', marginBottom: 12 }} />
               <button className="s-btn s-btn-primary" onClick={handleDecrypt} disabled={processing || !ciphertext.trim()}>
-                {processing ? 'Decrypting...' : '🔓 Decrypt'}
+                {processing ? t('common.loading') : `🔓 ${t('vault.encryption.decrypt')}`}
               </button>
               {decryptResult && (
                 <div style={{ marginTop: 12 }}>
@@ -286,7 +288,7 @@ const VaultPage: React.FC = () => {
                       onClick={handleStartArgusAndRetry}
                       disabled={processing}
                     >
-                      {processing ? 'Starting ARGUS...' : '▶ Start ARGUS & Retry'}
+                      {processing ? t('intel.argus.starting') : `▶ ${t('intel.argus.start')}`}
                     </button>
                   )}
                 </div>
@@ -300,13 +302,13 @@ const VaultPage: React.FC = () => {
           <motion.div key="notes" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             {/* Create Note */}
             <div className="s-card-spacy">
-              <div className="s-heading-md" style={{ marginBottom: 12 }}>New Secure Note</div>
+              <div className="s-heading-md" style={{ marginBottom: 12 }}>{t('vault.notes.create')}</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <input className="s-input" placeholder="Note title" value={noteTitle} onChange={(e) => setNoteTitle(e.target.value)} />
-                <textarea className="s-input" rows={4} placeholder="Note content (will be encrypted)..." value={noteContent} onChange={(e) => setNoteContent(e.target.value)} style={{ resize: 'vertical' }} />
-                <input className="s-input" type="password" placeholder="Encryption password" value={notePassword} onChange={(e) => setNotePassword(e.target.value)} />
+                <input className="s-input" placeholder={t('vault.notes.titlePlaceholder')} value={noteTitle} onChange={(e) => setNoteTitle(e.target.value)} />
+                <textarea className="s-input" rows={4} placeholder={t('vault.notes.contentPlaceholder')} value={noteContent} onChange={(e) => setNoteContent(e.target.value)} style={{ resize: 'vertical' }} />
+                <input className="s-input" type="password" placeholder={t('vault.encryption.passwordPlaceholder')} value={notePassword} onChange={(e) => setNotePassword(e.target.value)} />
                 <button className="s-btn s-btn-primary" onClick={handleSaveNote} disabled={!noteTitle.trim() || !noteContent.trim() || !notePassword.trim()}>
-                  🔒 Save Encrypted Note
+                  🔒 {t('vault.notes.create')}
                 </button>
               </div>
             </div>
@@ -314,12 +316,12 @@ const VaultPage: React.FC = () => {
             {/* Notes List */}
             <div className="s-card-spacy">
               <div className="s-flex-between" style={{ marginBottom: 12 }}>
-                <div className="s-heading-md">Saved Notes ({notes.length})</div>
+                <div className="s-heading-md">{t('vault.notes.title')} ({notes.length})</div>
                 <button className="s-btn s-btn-ghost s-btn-sm" onClick={fetchNotes} disabled={notesLoading}>↻</button>
               </div>
               {notes.length === 0 ? (
                 <div style={{ textAlign: 'center', padding: 32, color: 'var(--s-text-dim)' }}>
-                  {notesLoading ? 'Loading...' : 'No secure notes yet'}
+                  {notesLoading ? t('common.loading') : t('vault.notes.noNotes')}
                 </div>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -372,7 +374,7 @@ const VaultPage: React.FC = () => {
         {/* ═══ Password Generator ═══ */}
         {tab === 'passwords' && (
           <motion.div key="passwords" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="s-card-spacy">
-            <div className="s-heading-md" style={{ marginBottom: 16 }}>Password Generator</div>
+            <div className="s-heading-md" style={{ marginBottom: 16 }}>{t('vault.passwords.title')}</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 16 }}>
               <label style={{ fontSize: '0.8125rem', color: 'var(--s-text-secondary)' }}>Length:</label>
               <input type="range" min={8} max={64} value={pwLength} onChange={(e) => setPwLength(parseInt(e.target.value, 10))} style={{ flex: 1 }} />
@@ -411,7 +413,7 @@ const VaultPage: React.FC = () => {
         {tab === 'shredder' && (
           <motion.div key="shredder" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <div className="s-card-spacy">
-              <div className="s-heading-md" style={{ marginBottom: 12 }}>Secure File Shredder</div>
+              <div className="s-heading-md" style={{ marginBottom: 12 }}>{t('vault.shredder.title')}</div>
               <div style={{ fontSize: '0.8125rem', color: 'var(--s-text-muted)', marginBottom: 16, lineHeight: 1.6 }}>
                 Permanently destroy files with multi-pass overwrite. Shredded files cannot be recovered by any data recovery tool.
               </div>
@@ -455,7 +457,7 @@ const VaultPage: React.FC = () => {
         {/* ═══ Whitelist Config ═══ */}
         {tab === 'config' && (
           <motion.div key="config" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="s-card-spacy">
-            <div className="s-heading-md" style={{ marginBottom: 16 }}>IP Whitelist</div>
+            <div className="s-heading-md" style={{ marginBottom: 16 }}>{t('vault.argusEncryption.title')}</div>
             <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
               <input className="s-input" placeholder="IP address to whitelist" value={newWhitelistIp} onChange={(e) => setNewWhitelistIp(e.target.value)} style={{ maxWidth: 300 }} />
               <button className="s-btn s-btn-primary s-btn-sm" onClick={async () => {

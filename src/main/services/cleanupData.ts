@@ -1,13 +1,22 @@
-import { execSync } from 'child_process';
+import { execFile, execSync } from 'child_process';
+import { promisify } from 'util';
 import { getExecOptions } from './execOptions';
 
+const execFileAsync = promisify(execFile);
+
 /**
- * Helper function to execute PowerShell commands with proper error handling
+ * Helper function to execute PowerShell commands with proper error handling.
+ * Uses execFile with EncodedCommand to avoid shell quoting issues and main-thread blocking.
  */
-function execPowerShell(command: string): string {
+async function execPowerShell(command: string): Promise<string> {
   try {
-    const fullCommand = `powershell -ExecutionPolicy Bypass -NoProfile -Command "${command}"`;
-    return execSync(fullCommand, getExecOptions()).toString().trim();
+    const encoded = Buffer.from(command, 'utf16le').toString('base64');
+    const { stdout } = await execFileAsync(
+      'powershell',
+      ['-NoLogo', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-NoProfile', '-EncodedCommand', encoded],
+      getExecOptions(),
+    ) as { stdout: string };
+    return (stdout || '').trim();
   } catch (error: any) {
     console.error('PowerShell execution error:', error.message);
     return '';
@@ -30,22 +39,22 @@ export async function getCleanupData(): Promise<CleanupData> {
   try {
     // Get temp folder size
     const tempCmd = `$size = (Get-ChildItem $env:TEMP -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum; if($size){[math]::Round($size / 1GB, 2)}else{0}`;
-    const tempSizeStr = execPowerShell(tempCmd);
+    const tempSizeStr = await execPowerShell(tempCmd);
     const tempSizeGB = parseFloat(tempSizeStr) || 0;
 
     // Get Windows.old folder size
     const windowsOldCmd = `if(Test-Path C:\\Windows.old){$size = (Get-ChildItem C:\\Windows.old -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum; [math]::Round($size / 1GB, 2)}else{0}`;
-    const windowsOldSizeStr = execPowerShell(windowsOldCmd);
+    const windowsOldSizeStr = await execPowerShell(windowsOldCmd);
     const windowsOldSizeGB = parseFloat(windowsOldSizeStr) || 0;
 
     // Get Downloads folder size
     const downloadCmd = `$size = (Get-ChildItem $env:USERPROFILE\\Downloads -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum; if($size){[math]::Round($size / 1GB, 2)}else{0}`;
-    const downloadSizeStr = execPowerShell(downloadCmd);
+    const downloadSizeStr = await execPowerShell(downloadCmd);
     const downloadSizeGB = parseFloat(downloadSizeStr) || 0;
 
     // Get Recycle Bin size
     const recycleBinCmd = `$size = (Get-ChildItem 'C:\\$Recycle.Bin' -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum; if($size){[math]::Round($size / 1GB, 2)}else{0}`;
-    const recycleBinSizeStr = execPowerShell(recycleBinCmd);
+    const recycleBinSizeStr = await execPowerShell(recycleBinCmd);
     const recycleBinSizeGB = parseFloat(recycleBinSizeStr) || 0;
 
     // Get browser cache size (Chrome, Edge, Firefox)
@@ -64,10 +73,10 @@ export async function getCleanupData(): Promise<CleanupData> {
       }
       [math]::Round($total / 1GB, 2)
     `;
-    const browserCacheSizeStr = execPowerShell(browserCacheCmd);
+    const browserCacheSizeStr = await execPowerShell(browserCacheCmd);
     const browserCacheSizeGB = parseFloat(browserCacheSizeStr) || 0;
 
-    const totalCleanableGB = tempSizeGB + windowsOldSizeGB + recycleBinSizeGB + browserCacheSizeGB;
+    const totalCleanableGB = tempSizeGB + windowsOldSizeGB + downloadSizeGB + recycleBinSizeGB + browserCacheSizeGB;
 
     return {
       tempSizeGB,
@@ -98,13 +107,13 @@ export async function cleanTemp(): Promise<boolean> {
     console.log('Cleaning temp files...');
 
     // Clean user temp
-    execPowerShell('Remove-Item $env:TEMP\\* -Recurse -Force -ErrorAction SilentlyContinue');
+    await execPowerShell('Remove-Item $env:TEMP\\* -Recurse -Force -ErrorAction SilentlyContinue');
 
     // Clean Windows temp
-    execPowerShell('Remove-Item C:\\Windows\\Temp\\* -Recurse -Force -ErrorAction SilentlyContinue');
+    await execPowerShell('Remove-Item C:\\Windows\\Temp\\* -Recurse -Force -ErrorAction SilentlyContinue');
 
     // Clean prefetch
-    execPowerShell('Remove-Item C:\\Windows\\Prefetch\\* -Force -ErrorAction SilentlyContinue');
+    await execPowerShell('Remove-Item C:\\Windows\\Prefetch\\* -Force -ErrorAction SilentlyContinue');
 
     console.log('✓ Temp files cleaned');
     return true;
@@ -120,7 +129,7 @@ export async function cleanTemp(): Promise<boolean> {
 export async function cleanWindowsOld(): Promise<boolean> {
   try {
     console.log('Cleaning Windows.old...');
-    execPowerShell('if(Test-Path C:\\Windows.old){Remove-Item C:\\Windows.old -Recurse -Force -ErrorAction SilentlyContinue}');
+    await execPowerShell('if(Test-Path C:\\Windows.old){Remove-Item C:\\Windows.old -Recurse -Force -ErrorAction SilentlyContinue}');
     console.log('✓ Windows.old cleaned');
     return true;
   } catch (error: any) {
@@ -135,7 +144,7 @@ export async function cleanWindowsOld(): Promise<boolean> {
 export async function emptyRecycleBin(): Promise<boolean> {
   try {
     console.log('Emptying Recycle Bin...');
-    execPowerShell('Clear-RecycleBin -Force -ErrorAction SilentlyContinue');
+    await execPowerShell('Clear-RecycleBin -Force -ErrorAction SilentlyContinue');
     console.log('✓ Recycle Bin emptied');
     return true;
   } catch (error: any) {
@@ -152,13 +161,13 @@ export async function cleanBrowserCache(): Promise<boolean> {
     console.log('Cleaning browser caches...');
 
     // Clean Chrome cache
-    execPowerShell('Remove-Item "$env:LOCALAPPDATA\\Google\\Chrome\\User Data\\Default\\Cache\\*" -Recurse -Force -ErrorAction SilentlyContinue');
+    await execPowerShell('Remove-Item "$env:LOCALAPPDATA\\Google\\Chrome\\User Data\\Default\\Cache\\*" -Recurse -Force -ErrorAction SilentlyContinue');
 
     // Clean Edge cache
-    execPowerShell('Remove-Item "$env:LOCALAPPDATA\\Microsoft\\Edge\\User Data\\Default\\Cache\\*" -Recurse -Force -ErrorAction SilentlyContinue');
+    await execPowerShell('Remove-Item "$env:LOCALAPPDATA\\Microsoft\\Edge\\User Data\\Default\\Cache\\*" -Recurse -Force -ErrorAction SilentlyContinue');
 
     // Clean Firefox cache
-    execPowerShell('Get-ChildItem "$env:APPDATA\\Mozilla\\Firefox\\Profiles" -Directory -ErrorAction SilentlyContinue | ForEach-Object {Remove-Item "$($_.FullName)\\cache2\\*" -Recurse -Force -ErrorAction SilentlyContinue}');
+    await execPowerShell('Get-ChildItem "$env:APPDATA\\Mozilla\\Firefox\\Profiles" -Directory -ErrorAction SilentlyContinue | ForEach-Object {Remove-Item "$($_.FullName)\\cache2\\*" -Recurse -Force -ErrorAction SilentlyContinue}');
 
     console.log('✓ Browser caches cleaned');
     return true;

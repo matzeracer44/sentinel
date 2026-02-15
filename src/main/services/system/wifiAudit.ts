@@ -76,7 +76,7 @@ export async function auditWifi(): Promise<WifiAuditResult> {
     const channelMatch = ifaceOut.match(/^\s*(?:Kanal|Channel)\s*:\s*(\d+)/m);
     const stateMatch = ifaceOut.match(/^\s*(?:Zustand|State)\s*:\s*(.+)$/m);
 
-    if (stateMatch && stateMatch[1].trim().toLowerCase().includes('connect')) {
+    if (stateMatch && /connect|verbunden/i.test(stateMatch[1].trim())) {
       result.connected = true;
     }
     if (ssidMatch) result.currentSSID = ssidMatch[1].trim();

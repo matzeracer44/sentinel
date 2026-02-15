@@ -18,8 +18,7 @@
     "paths": {
       "@/*": ["src/*"],
       "@main/*": ["src/main/*"],
-      "@renderer/*": ["src/renderer/*"],
-      "@engines/*": ["src/engines/*"]
+      "@renderer/*": ["src/renderer/*"]
     }
   },
   "include": ["src/**/*"],

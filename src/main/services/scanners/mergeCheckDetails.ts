@@ -7,7 +7,16 @@
 import type { CheckDetailTemplate } from './networkScanChecks';
 import { NETWORK_CHECK_DETAILS } from './networkScanChecks';
 import { PRIVACY_CHECK_DETAILS } from './privacyScanChecks';
-import { EDR_CHECK_DETAILS, KERNEL_CHECK_DETAILS, PERFORMANCE_CHECK_DETAILS } from './edrKernelPerfChecks';
+import { EDR_CHECK_DETAILS, EDR_CHECK_DETAILS_EXTRA, KERNEL_CHECK_DETAILS, PERFORMANCE_CHECK_DETAILS } from './edrKernelPerfChecks';
+import { NETWORK_CHECK_DETAILS_DE, PRIVACY_CHECK_DETAILS_DE } from './checkTemplates.de';
+import { EDR_CHECK_DETAILS_DE } from './edrChecks.de';
+import { KERNEL_CHECK_DETAILS_DE } from './kernelChecks.de';
+import { PERFORMANCE_CHECK_DETAILS_DE } from './perfChecks.de';
+
+// ── Language state (set by renderer via IPC) ──
+let _checkLang: 'en' | 'de' = 'de';
+export function setCheckLanguage(lang: 'en' | 'de') { _checkLang = lang; }
+export function getCheckLanguage(): string { return _checkLang; }
 
 interface RuntimeCheck {
   id: string;
@@ -87,7 +96,7 @@ const ID_TO_TEMPLATE: Record<string, string> = {
   'edr-nla': 'network-level-auth',
   'edr-asr': 'attack-surface-reduction',
 
-  // ── Kernel & Firmware ──
+  // ── Kernel & Firmware (15) ──
   'kernel-elam': 'elam-status',
   'kernel-vbs': 'vbs-status',
   'kernel-tpm': 'tpm-status',
@@ -95,8 +104,23 @@ const ID_TO_TEMPLATE: Record<string, string> = {
   'kernel-dse': 'driver-signing',
   'kernel-msr': 'spectre-meltdown',
   'kernel-shadowstack': 'shadow-stack',
+  'kernel-iommu': 'kernel-dma-protection',
+  'kernel-microcode': 'cpu-microcode',
+  'kernel-dkom': 'dkom-detection',
+  'kernel-vulndrivers': 'vulnerable-driver-blocklist',
+  'kernel-unsigneddrivers': 'unsigned-driver-audit',
+  'kernel-privesc': 'privilege-escalation-hardening',
+  'kernel-integrity': 'kernel-file-integrity',
+  'kernel-driverpaths': 'kernel-driver-paths',
 
-  // ── Performance ──
+  // ── EDR & Behavioral (missing 5) ──
+  'edr-com': 'com-hijacking',
+  'edr-sandbox': 'sandbox-capabilities',
+  'edr-behavior': 'behavior-analysis',
+  'edr-critfiles': 'critical-file-protection',
+  'edr-handles': 'handle-monitor',
+
+  // ── Performance (25) ──
   'perf-dpc': 'dpc-latency',
   'perf-timer': 'timer-resolution',
   'perf-ultimate': 'power-plan',
@@ -104,6 +128,24 @@ const ID_TO_TEMPLATE: Record<string, string> = {
   'perf-coreparking': 'core-parking',
   'perf-pagefile': 'pagefile-config',
   'perf-memcomp': 'memory-compression',
+  'perf-writecache': 'disk-write-cache',
+  'perf-storage': 'indexing-service',
+  'perf-hags': 'gpu-scheduling',
+  'perf-bcdedit': 'timer-resolution',
+  'perf-bgapps': 'startup-impact',
+  'perf-telemetry': 'startup-impact',
+  'perf-dta': 'cpu-topology',
+  'perf-irq': 'interrupt-steering',
+  'perf-largepages': 'large-pages',
+  'perf-vram': 'vram-status',
+  'perf-standby': 'standby-list',
+  'perf-ioprio': 'io-priority',
+  'perf-mft': 'ntfs-health',
+  'perf-winsxs': 'winsxs-store',
+  'perf-regcomp': 'registry-size',
+  'perf-ctxswitch': 'context-switches',
+  'perf-ramstab': 'ram-stability',
+  'perf-thermal': 'thermal-status',
 
   // ── Privacy (22) ──
   'priv-hwid': 'hardware-id-exposure',
@@ -130,21 +172,37 @@ const ID_TO_TEMPLATE: Record<string, string> = {
   'priv-dashboard': 'data-science-dashboard',
 };
 
-/** All detail templates merged into one lookup */
-const ALL_TEMPLATES: Record<string, CheckDetailTemplate> = {
+/** All detail templates merged into one lookup — English (fallback) */
+const ALL_TEMPLATES_EN: Record<string, CheckDetailTemplate> = {
   ...NETWORK_CHECK_DETAILS,
   ...PRIVACY_CHECK_DETAILS,
   ...EDR_CHECK_DETAILS,
+  ...EDR_CHECK_DETAILS_EXTRA,
   ...KERNEL_CHECK_DETAILS,
   ...PERFORMANCE_CHECK_DETAILS,
 };
+
+/** German overlay — full coverage for all 91 checks */
+const ALL_TEMPLATES_DE: Record<string, CheckDetailTemplate> = {
+  ...ALL_TEMPLATES_EN,
+  ...NETWORK_CHECK_DETAILS_DE,
+  ...PRIVACY_CHECK_DETAILS_DE,
+  ...EDR_CHECK_DETAILS_DE,
+  ...KERNEL_CHECK_DETAILS_DE,
+  ...PERFORMANCE_CHECK_DETAILS_DE,
+};
+
+function getTemplates(): Record<string, CheckDetailTemplate> {
+  return _checkLang === 'de' ? ALL_TEMPLATES_DE : ALL_TEMPLATES_EN;
+}
 
 /**
  * Enrich a runtime check with its detail template.
  */
 function enrichCheck(check: RuntimeCheck): EnrichedCheck {
   const templateKey = ID_TO_TEMPLATE[check.id];
-  const template = templateKey ? ALL_TEMPLATES[templateKey] : undefined;
+  const templates = getTemplates();
+  const template = templateKey ? templates[templateKey] : undefined;
 
   if (!template) {
     return { ...check };

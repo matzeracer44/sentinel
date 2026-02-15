@@ -1,8 +1,26 @@
-import { execSync, spawnSync } from 'child_process';
+import { exec, execFile } from 'child_process';
+import { promisify } from 'util';
 import { addActivityLog } from './activityLog';
 import * as path from 'path';
 import * as fs from 'fs';
 import { isExternalIpLookupAllowed } from './sentinelConfig';
+import { validateIPForShell, sanitizeShellArg } from '../../shared/utils';
+
+const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
+
+async function runCmd(cmd: string, opts: { timeout?: number; maxBuffer?: number; windowsHide?: boolean } = {}): Promise<string> {
+  const { stdout } = await execAsync(cmd, { encoding: 'utf8', windowsHide: true, timeout: 10000, ...opts });
+  return (stdout || '').trim();
+}
+
+async function runPS(script: string, timeout = 15000): Promise<string> {
+  const encoded = Buffer.from(script, 'utf16le').toString('base64');
+  const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded], {
+    timeout, windowsHide: true, encoding: 'utf8', maxBuffer: 50 * 1024 * 1024,
+  });
+  return (stdout || '').trim();
+}
 
 export interface ProcessInfo {
   pid: number;
@@ -51,11 +69,10 @@ export interface NetworkConnection {
 
 export async function getProcessesByMemory(limit: number = 20): Promise<ProcessInfo[]> {
 	try {
-		// Try a corrected PowerShell command (Get-CimInstance + proper Select-Object expressions)
-		const ps = `powershell -ExecutionPolicy Bypass -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.Name -ne 'Idle' } | Sort-Object -Property @{Expression={[long]$_.WorkingSetSize}} -Descending | Select-Object -First ${limit} @{n='pid';e={$_.ProcessId}}, @{n='name';e={$_.Name}}, @{n='path';e={$_.ExecutablePath}}, @{n='memory';e={[math]::Round($_.WorkingSetSize / 1MB)}} | ConvertTo-Json -Depth 2"`;
 		try {
-			const result = execSync(ps, { timeout: 10000, maxBuffer: 1024 * 1024, encoding: 'utf8', windowsHide: true });
-			const processes = JSON.parse(result.toString());
+			const psScript = `Get-CimInstance Win32_Process|Where-Object{$_.Name -ne 'Idle'}|Sort-Object -Property @{Expression={[long]$_.WorkingSetSize}} -Descending|Select-Object -First ${limit} @{n='pid';e={$_.ProcessId}},@{n='name';e={$_.Name}},@{n='path';e={$_.ExecutablePath}},@{n='memory';e={[math]::Round($_.WorkingSetSize/1MB)}}|ConvertTo-Json -Depth 2`;
+			const result = await runPS(psScript, 10000);
+			const processes = JSON.parse(result);
 			if (processes && (Array.isArray(processes) || typeof processes === 'object')) {
 				const arr = Array.isArray(processes) ? processes : [processes];
 				return arr.map((p: any) => ({
@@ -73,7 +90,7 @@ export async function getProcessesByMemory(limit: number = 20): Promise<ProcessI
 
 		// Fallback: use tasklist CSV parsing (works reliably without complex PowerShell)
 		try {
-			const out = execSync('tasklist /FO CSV /NH', { encoding: 'utf8', timeout: 8000, windowsHide: true });
+			const out = await runCmd('tasklist /FO CSV /NH', { timeout: 8000 });
 			const lines = out.split('\n').map(l => l.trim()).filter(Boolean);
 			const items: Array<{ pid: number; name: string; memoryMB: number }> = [];
 			for (const ln of lines) {
@@ -108,44 +125,47 @@ export async function getProcessesByMemory(limit: number = 20): Promise<ProcessI
 	}
 }
 
-function ensureProcessNotRunning(pid: number): boolean {
+async function ensureProcessNotRunning(pid: number): Promise<boolean> {
   try {
-    execSync(
-      `powershell -ExecutionPolicy Bypass -NoProfile -Command "if (Get-Process -Id ${pid} -ErrorAction SilentlyContinue) { throw 'alive' }"`,
-      { windowsHide: true }
-    );
+    await runPS(`if(Get-Process -Id ${pid} -EA SilentlyContinue){throw 'alive'}`, 5000);
     return true;
   } catch (err: any) {
     return err?.message?.includes('alive') ? false : true;
   }
 }
 
-function stopProcessForcefully(pid: number): void {
+async function stopProcessForcefully(pid: number): Promise<void> {
   const commands = [
-    `powershell -ExecutionPolicy Bypass -NoProfile -Command "if (Get-Process -Id ${pid} -ErrorAction SilentlyContinue) { Stop-Process -Id ${pid} -Force -ErrorAction Stop }"`,
     `taskkill /F /PID ${pid}`,
-    `powershell -ExecutionPolicy Bypass -NoProfile -Command "try { $p = Get-CimInstance Win32_Process -Filter 'ProcessId = ${pid}'; if ($p) { $p | Remove-CimInstance -ErrorAction Stop } } catch { }"`,
+  ];
+  const psCommands = [
+    `if(Get-Process -Id ${pid} -EA SilentlyContinue){Stop-Process -Id ${pid} -Force -EA Stop}`,
+    `try{$p=Get-CimInstance Win32_Process -Filter 'ProcessId = ${pid}';if($p){$p|Remove-CimInstance -EA Stop}}catch{}`,
   ];
 
+  // Try taskkill first (fastest)
   for (const cmd of commands) {
     try {
-      execSync(cmd, { windowsHide: true, stdio: 'ignore' });
-      if (ensureProcessNotRunning(pid)) {
-        return;
-      }
-    } catch (err) {
-      // Keep trying remaining strategies
-    }
+      await runCmd(cmd, { timeout: 5000 });
+      if (await ensureProcessNotRunning(pid)) return;
+    } catch { /* next strategy */ }
+  }
+  // Then PS strategies
+  for (const ps of psCommands) {
+    try {
+      await runPS(ps, 5000);
+      if (await ensureProcessNotRunning(pid)) return;
+    } catch { /* next strategy */ }
   }
 
-  if (!ensureProcessNotRunning(pid)) {
+  if (!(await ensureProcessNotRunning(pid))) {
     throw new Error(`Process ${pid} resisted termination`);
   }
 }
 
 export async function killProcess(pid: number, processName: string): Promise<{ success: boolean; message: string }> {
   try {
-    stopProcessForcefully(pid);
+    await stopProcessForcefully(pid);
     addActivityLog('Shield', 'Kill Process', `Terminated process: ${processName} (PID: ${pid})`, 'success');
     return { success: true, message: `Killed process ${processName}` };
   } catch (error: any) {
@@ -160,7 +180,7 @@ export async function killProcess(pid: number, processName: string): Promise<{ s
 export async function getBlockedIPs(): Promise<IPBlockInfo[]> {
   try {
     const hostsFile = 'C:\\Windows\\System32\\drivers\\etc\\hosts';
-    const content = execSync(`type "${hostsFile}"`, { encoding: 'utf8', windowsHide: true });
+    const content = await runCmd(`type "${hostsFile}"`);
     
     const blockedIPs: IPBlockInfo[] = [];
     const lines = content.split('\n');
@@ -188,9 +208,11 @@ export async function getBlockedIPs(): Promise<IPBlockInfo[]> {
 
 export async function blockIP(ip: string, reason: string): Promise<{ success: boolean; message: string }> {
   try {
+    const safeIp = validateIPForShell(ip);
+    if (!safeIp) return { success: false, message: 'Invalid IP address format' };
+    const safeReason = sanitizeShellArg(reason).slice(0, 200);
     // Add to hosts file
-    const command = `powershell -ExecutionPolicy Bypass -NoProfile -Command "Add-Content -Path 'C:\\\\Windows\\\\System32\\\\drivers\\\\etc\\\\hosts' -Value '127.0.0.1 ${ip}' -Force"`;
-    execSync(command, { windowsHide: true });
+    await runPS(`Add-Content -Path 'C:\Windows\System32\drivers\etc\hosts' -Value '127.0.0.1 ${safeIp}' -Force`);
 
     // Also create a /24 firewall rule
     try {
@@ -205,8 +227,8 @@ export async function blockIP(ip: string, reason: string): Promise<{ success: bo
       addActivityLog('Shield', 'Block IP', `Failed to add firewall subnet rule for ${ip}: ${String(e)}`, 'warning');
     }
     
-    addActivityLog('Shield', 'Block IP', `Blocked IP: ${ip} - Reason: ${reason}`, 'success');
-    return { success: true, message: `Blocked IP ${ip} and /24 subnet` };
+    addActivityLog('Shield', 'Block IP', `Blocked IP: ${safeIp} - Reason: ${safeReason}`, 'success');
+    return { success: true, message: `Blocked IP ${safeIp} and /24 subnet` };
   } catch (error: any) {
     const message = `Failed to block IP: ${error.message}`;
     addActivityLog('Shield', 'Block IP', message, 'error');
@@ -230,23 +252,25 @@ export async function blockSubnet(
       subnet = `${octets[0]}.${octets[1]}.${octets[2]}.0/24`;
     }
 
-    const baseName = ruleName || `Sentinel Block SUBNET ${subnet}`;
+    const safeSubnet = validateIPForShell(subnet);
+    if (!safeSubnet) return { success: false, message: 'Invalid subnet/IP format' };
+
+    const baseName = sanitizeShellArg(ruleName || `Sentinel Block SUBNET ${safeSubnet}`).slice(0, 200);
+    if (!baseName) return { success: false, message: 'Invalid rule name' };
 
     if (direction === 'in' || direction === 'both') {
       const inName = `${baseName} - IN`;
-      const cmdIn = `netsh advfirewall firewall add rule name="${inName}" dir=in action=block remoteip=${subnet} enable=yes`;
-      execSync(cmdIn, { windowsHide: true });
+      await runCmd(`netsh advfirewall firewall add rule name="${inName}" dir=in action=block remoteip=${safeSubnet} enable=yes`);
       addSentinelRule(inName);
     }
     if (direction === 'out' || direction === 'both') {
       const outName = `${baseName} - OUT`;
-      const cmdOut = `netsh advfirewall firewall add rule name="${outName}" dir=out action=block remoteip=${subnet} enable=yes`;
-      execSync(cmdOut, { windowsHide: true });
+      await runCmd(`netsh advfirewall firewall add rule name="${outName}" dir=out action=block remoteip=${safeSubnet} enable=yes`);
       addSentinelRule(outName);
     }
 
-    addActivityLog('Shield', 'Block Subnet', `Blocked subnet: ${subnet} (${direction})`, 'success');
-    return { success: true, message: `Created firewall rule(s) for ${subnet}` };
+    addActivityLog('Shield', 'Block Subnet', `Blocked subnet: ${safeSubnet} (${direction})`, 'success');
+    return { success: true, message: `Created firewall rule(s) for ${safeSubnet}` };
   } catch (error: any) {
     const message = `Failed to create subnet firewall rule: ${error.message}`;
     addActivityLog('Shield', 'Block Subnet', message, 'error');
@@ -266,14 +290,12 @@ export async function blockPort(
 
     if (direction === 'in' || direction === 'both') {
       const inName = `${baseName} - IN`;
-      const cmdIn = `netsh advfirewall firewall add rule name="${inName}" dir=in action=block protocol=${proto} localport=${port} enable=yes`;
-      execSync(cmdIn, { windowsHide: true });
+      await runCmd(`netsh advfirewall firewall add rule name="${inName}" dir=in action=block protocol=${proto} localport=${port} enable=yes`);
       addSentinelRule(inName);
     }
     if (direction === 'out' || direction === 'both') {
       const outName = `${baseName} - OUT`;
-      const cmdOut = `netsh advfirewall firewall add rule name="${outName}" dir=out action=block protocol=${proto} localport=${port} enable=yes`;
-      execSync(cmdOut, { windowsHide: true });
+      await runCmd(`netsh advfirewall firewall add rule name="${outName}" dir=out action=block protocol=${proto} localport=${port} enable=yes`);
       addSentinelRule(outName);
     }
 
@@ -293,24 +315,27 @@ export async function blockIPRange(
   direction: 'in' | 'out' | 'both' = 'both'
 ): Promise<{ success: boolean; message: string }> {
   try {
+    const safeStart = validateIPForShell(startIP);
+    const safeEnd = validateIPForShell(endIP);
+    if (!safeStart || !safeEnd) return { success: false, message: 'Invalid IP address format in range' };
+
     // netsh supports remoteip=start-end
-    const baseName = ruleName || `Sentinel Block Range ${startIP}-${endIP}`;
+    const baseName = sanitizeShellArg(ruleName || `Sentinel Block Range ${safeStart}-${safeEnd}`).slice(0, 200);
+    if (!baseName) return { success: false, message: 'Invalid rule name' };
 
     if (direction === 'in' || direction === 'both') {
       const inName = `${baseName} - IN`;
-      const cmdIn = `netsh advfirewall firewall add rule name="${inName}" dir=in action=block remoteip=${startIP}-${endIP} enable=yes`;
-      execSync(cmdIn, { windowsHide: true });
+      await runCmd(`netsh advfirewall firewall add rule name="${inName}" dir=in action=block remoteip=${safeStart}-${safeEnd} enable=yes`);
       addSentinelRule(inName);
     }
     if (direction === 'out' || direction === 'both') {
       const outName = `${baseName} - OUT`;
-      const cmdOut = `netsh advfirewall firewall add rule name="${outName}" dir=out action=block remoteip=${startIP}-${endIP} enable=yes`;
-      execSync(cmdOut, { windowsHide: true });
+      await runCmd(`netsh advfirewall firewall add rule name="${outName}" dir=out action=block remoteip=${safeStart}-${safeEnd} enable=yes`);
       addSentinelRule(outName);
     }
 
-    addActivityLog('Shield', 'Block IP Range', `Blocked range: ${startIP} - ${endIP}`, 'success');
-    return { success: true, message: `Created firewall rule(s) for range ${startIP}-${endIP}` };
+    addActivityLog('Shield', 'Block IP Range', `Blocked range: ${safeStart} - ${safeEnd}`, 'success');
+    return { success: true, message: `Created firewall rule(s) for range ${safeStart}-${safeEnd}` };
   } catch (error: any) {
     const message = `Failed to create IP range firewall rule: ${error.message}`;
     addActivityLog('Shield', 'Block IP Range', message, 'error');
@@ -343,12 +368,7 @@ Get-NetFirewallRule | ForEach-Object {
   }
 } | ConvertTo-Json -Depth 2 -Compress
 `;
-    const result = spawnSync('powershell.exe',
-      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', '-'],
-      { input: psScript, timeout: 45000, windowsHide: true, encoding: 'utf8', maxBuffer: 50 * 1024 * 1024 }
-    );
-    if (result.error) throw result.error;
-    const output = (result.stdout || '').trim();
+    const output = await runPS(psScript.trim(), 45000);
     if (!output) return [];
     const rules = JSON.parse(output);
     
@@ -367,7 +387,7 @@ export async function createFirewallRule(
 ): Promise<{ success: boolean; message: string }> {
   try {
     const command = `netsh advfirewall firewall add rule name="${ruleName}" dir=in action=${action.toLowerCase()} protocol=${protocol.toUpperCase()} localport=${port}`;
-    execSync(command, { windowsHide: true });
+    await runCmd(command);
     
     addActivityLog('Shield', 'Create Firewall Rule', `Created rule: ${ruleName} (${protocol}:${port})`, 'success');
 
@@ -385,7 +405,7 @@ export async function createFirewallRule(
 export async function deleteFirewallRule(ruleName: string): Promise<{ success: boolean; message: string }> {
   try {
     const command = `netsh advfirewall firewall delete rule name="${ruleName}"`;
-    execSync(command, { windowsHide: true });
+    await runCmd(command);
     
     addActivityLog('Shield', 'Delete Firewall Rule', `Deleted rule: ${ruleName}`, 'success');
 
@@ -406,7 +426,7 @@ export async function setFirewallRuleEnabled(ruleName: string, enabled: boolean)
     // Escape double quotes in name
     const nameEsc = ruleName.replace(/"/g, '\\"');
     const cmd = `netsh advfirewall firewall set rule name="${nameEsc}" new enable=${enabled ? 'yes' : 'no'}`;
-    execSync(cmd, { windowsHide: true });
+    await runCmd(cmd);
     addActivityLog('Shield', 'Set Firewall Rule Enabled', `Rule "${ruleName}" set to ${enabled ? 'enabled' : 'disabled'}`, 'success');
     return { success: true, message: `Rule ${ruleName} ${enabled ? 'enabled' : 'disabled'}` };
   } catch (error: any) {
@@ -440,7 +460,7 @@ export async function updateFirewallRule(
     if (parts.length === 0) return { success: false, message: 'No update options provided' };
 
     const cmd = `netsh advfirewall firewall set rule name="${nameEsc}" new ${parts.join(' ')}`;
-    execSync(cmd, { windowsHide: true });
+    await runCmd(cmd);
 
     addActivityLog('Shield', 'Update Firewall Rule', `Updated rule "${ruleName}" with ${JSON.stringify(options)}`, 'success');
     return { success: true, message: `Updated rule ${ruleName}` };
@@ -455,10 +475,9 @@ export async function updateFirewallRule(
 
 export async function scanOpenPorts(): Promise<PortInfo[]> {
   try {
-    const command = `powershell -ExecutionPolicy Bypass -NoProfile -Command "Get-NetTCPConnection -State Listen | Select-Object @{n='port';e='LocalPort'}, @{n='process';e={Get-Process -Id \\$_.OwningProcess | Select-Object -ExpandProperty Name}}, @{n='pid';e='OwningProcess'} | ConvertTo-Json"`;
-    
-    const result = execSync(command, { timeout: 10000, windowsHide: true });
-    const ports = JSON.parse(result.toString());
+    const psScript = `Get-NetTCPConnection -State Listen|Select-Object @{n='port';e='LocalPort'},@{n='process';e={(Get-Process -Id $_.OwningProcess -EA SilentlyContinue).Name}},@{n='pid';e='OwningProcess'}|ConvertTo-Json`;
+    const result = await runPS(psScript, 10000);
+    const ports = JSON.parse(result);
     
     return Array.isArray(ports)
       ? ports.map((p: any) => ({
@@ -750,14 +769,12 @@ export async function getNetworkTrafficWithMetadata(limitIPs: number = 50): Prom
   metadata: Record<string, IPMetadataResult>;
 }> {
   try {
-    // Try PowerShell first
-    const ps = `powershell -ExecutionPolicy Bypass -NoProfile -Command "Get-NetTCPConnection -State Established | Select-Object LocalAddress,LocalPort,RemoteAddress,RemotePort,State,OwningProcess,@{n='ProcessName';e={(Get-Process -Id \\$_.OwningProcess -ErrorAction SilentlyContinue).Name}} | ConvertTo-Json"`;
     let raw = '';
     try {
-      raw = execSync(ps, { timeout: 10000, maxBuffer: 5 * 1024 * 1024 }).toString();
+      raw = await runPS(`Get-NetTCPConnection -State Established|Select-Object LocalAddress,LocalPort,RemoteAddress,RemotePort,State,OwningProcess,@{n='ProcessName';e={(Get-Process -Id $_.OwningProcess -EA SilentlyContinue).Name}}|ConvertTo-Json`, 10000);
     } catch (e) {
       // Fallback to netstat -ano parsing
-      const netstat = execSync('netstat -ano -p tcp', { timeout: 10000, maxBuffer: 5 * 1024 * 1024 }).toString();
+      const netstat = await runCmd('netstat -ano -p tcp', { timeout: 10000, maxBuffer: 5 * 1024 * 1024 });
       const lines = netstat.split('\n').slice(4).map(l => l.trim()).filter(Boolean);
       const connections: NetworkConnection[] = [];
       for (const line of lines) {
@@ -876,9 +893,11 @@ export async function getNetworkTrafficWithMetadata(limitIPs: number = 50): Prom
 
 export async function unblockIP(ip: string): Promise<{ success: boolean; message: string }> {
   try {
+    const safeIp = validateIPForShell(ip);
+    if (!safeIp) return { success: false, message: 'Invalid IP address format' };
     // Remove from hosts file
-    const command = `powershell -ExecutionPolicy Bypass -NoProfile -Command "(Get-Content 'C:\\\\Windows\\\\System32\\\\drivers\\\\etc\\\\hosts') | Where-Object { \\$_ -notmatch '${ip.replace(/\./g, '\\\\.')}' } | Set-Content 'C:\\\\Windows\\\\System32\\\\drivers\\\\etc\\\\hosts' -Force"`;
-    execSync(command, { windowsHide: true });
+    const escapedIp = safeIp.replace(/\./g, '\\.');
+    await runPS(`(Get-Content 'C:\Windows\System32\drivers\etc\hosts')|Where-Object{$_ -notmatch '${escapedIp}'}|Set-Content 'C:\Windows\System32\drivers\etc\hosts' -Force`);
 
     // Also delete related /24 sentinel firewall rules (best-effort)
     try {

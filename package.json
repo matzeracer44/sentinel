@@ -1,6 +1,6 @@
 {
   "name": "sentinel",
-  "version": "2.0.0",
+  "version": "3.4.0",
   "description": "All-in-One Windows Security & Performance Suite",
   "main": "dist/main/main.js",
   "author": "Sentinel Team",
@@ -13,34 +13,20 @@
     "dev": "npm run build && npm start",
     "dev:watch": "webpack --config webpack.main.config.js --watch & webpack --config webpack.renderer.config.js --watch",
     "serve": "webpack serve --config webpack.renderer.config.js --port 3000",
-    "native:rebuild": "npx @electron/rebuild -f -w better-sqlite3"
+    "native:rebuild": "npx @electron/rebuild -f -w better-sqlite3 classic-level"
   },
   "dependencies": {
-    "@emotion/is-prop-valid": "^1.4.0",
-    "@emotion/styled": "^11.14.1",
     "@tanstack/react-query": "^5.0.0",
-    "@types/react-window": "^1.8.8",
     "better-sqlite3": "^12.6.2",
-    "chokidar": "^3.5.3",
     "classic-level": "^1.4.1",
-    "claude-code": "^1.0.0",
     "d3": "^7.9.0",
-    "date-fns": "^3.0.0",
-    "dns-packet": "^5.6.0",
     "framer-motion": "^11.0.0",
-    "fs-extra": "^11.2.0",
     "i18next": "^25.7.4",
     "i18next-browser-languagedetector": "^8.2.0",
-    "lodash": "^4.17.21",
-    "node-powershell": "^5.0.1",
     "react": "^18.0.0",
     "react-dom": "^18.0.0",
-    "react-hot-toast": "^2.6.0",
     "react-i18next": "^16.5.2",
     "react-router-dom": "^6.21.0",
-    "react-window": "^1.8.10",
-    "recharts": "^2.10.0",
-    "winston": "^3.11.0",
     "zod": "^3.22.0"
   },
   "devDependencies": {
@@ -51,8 +37,6 @@
     "@testing-library/react": "^14.1.0",
     "@types/better-sqlite3": "^7.6.8",
     "@types/d3": "^7.4.3",
-    "@types/fs-extra": "^11.0.4",
-    "@types/lodash": "^4.14.202",
     "@types/node": "^20.0.0",
     "@types/react": "^18.0.0",
     "@types/react-dom": "^18.0.0",
@@ -85,7 +69,7 @@
     "ts-loader": "^9.0.0",
     "typescript": "^5.0.0",
     "webpack": "^5.0.0",
-    "webpack-cli": "^5.0.0",
+    "webpack-cli": "^5.1.4",
     "webpack-dev-server": "^5.2.3"
   },
   "build": {
@@ -96,13 +80,30 @@
     },
     "files": [
       "dist/**/*",
+      "node_modules/better-sqlite3/**/*",
+      "node_modules/classic-level/**/*",
+      "node_modules/abstract-level/**/*",
+      "node_modules/node-gyp-build/**/*",
+      "node_modules/module-error/**/*",
+      "node_modules/catering/**/*",
+      "node_modules/level-supports/**/*",
+      "node_modules/level-transcoder/**/*",
+      "node_modules/maybe-combine-errors/**/*",
+      "assets/**/*",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "ARGUS",
+        "to": "ARGUS",
+        "filter": ["**/*", "!__pycache__/**", "!*.pyc", "!logs/**", "!.env"]
+      }
     ],
     "win": {
       "target": [
         "nsis"
       ],
-      "icon": "public/icon.ico"
+      "icon": "assets/icon.png"
     },
     "nsis": {
       "oneClick": false,

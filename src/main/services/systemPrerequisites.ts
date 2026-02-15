@@ -1,17 +1,12 @@
-import { execSync } from 'child_process';
+import { exec } from 'child_process';
+import { promisify } from 'util';
 import { getExecOptions } from './execOptions';
 
-/**
- * Helper function to execute PowerShell commands with proper error handling
- */
-function execPowerShell(command: string): string {
-  try {
-    const fullCommand = `powershell -ExecutionPolicy Bypass -NoProfile -Command "${command}"`;
-    return execSync(fullCommand, getExecOptions()).toString().trim();
-  } catch (error: any) {
-    console.error('PowerShell execution error:', error.message);
-    return '';
-  }
+const execAsync = promisify(exec);
+
+async function runCmd(cmd: string, opts: Record<string, any> = {}): Promise<string> {
+  const { stdout } = await execAsync(cmd, { encoding: 'utf8', windowsHide: true, timeout: 10000, ...opts });
+  return (stdout || '').trim();
 }
 
 /**
@@ -24,23 +19,14 @@ export async function ensureServices(): Promise<void> {
 
   for (const svc of required) {
     try {
-      const status = execSync(`sc query ${svc}`, { encoding: 'utf8', windowsHide: true }).toString();
+      const status = await runCmd(`sc query ${svc}`);
 
       if (!status.includes('RUNNING') || status.includes('DISABLED')) {
         console.log(`Fixing service: ${svc}`);
-
-        // Set service to automatic start
-        try {
-          execSync(`sc config ${svc} start=auto`, { windowsHide: true });
-        } catch (e) {
+        try { await runCmd(`sc config ${svc} start=auto`); } catch (e) {
           console.log(`Could not set ${svc} to auto start (may need admin)`);
         }
-
-        // Try to start service
-        try {
-          execSync(`net start ${svc}`, { windowsHide: true });
-          console.log(`✓ Started service: ${svc}`);
-        } catch (e) {
+        try { await runCmd(`net start ${svc}`); console.log(`✓ Started service: ${svc}`); } catch (e) {
           console.log(`Service ${svc} may already be running or requires admin`);
         }
       } else {
@@ -63,8 +49,8 @@ export async function ensureRegistryAccess(): Promise<void> {
 
   // Only check and start WMI service if needed
   try {
-    execSync('sc config winmgmt start=auto', { windowsHide: true, stdio: 'ignore' });
-    execSync('net start winmgmt', { windowsHide: true, stdio: 'ignore' });
+    await runCmd('sc config winmgmt start=auto');
+    await runCmd('net start winmgmt');
     console.log('✓ WMI service configured');
   } catch (error: any) {
     console.log('✓ WMI service already running or configured');
@@ -82,49 +68,20 @@ export async function verifySystemData(): Promise<boolean> {
   console.log('Verifying system data access...');
 
   // Use WMIC instead of Get-WmiObject for better performance
-  const tests = {
-    CPU: () => {
-      try {
-        return execSync('wmic cpu get name', { timeout: 5000, encoding: 'utf8', windowsHide: true }).toString().split('\n')[1]?.trim() || '';
-      } catch (e) {
-        return '';
-      }
-    },
-    RAM: () => {
-      try {
-        return execSync('wmic os get TotalVisibleMemorySize', { timeout: 5000, encoding: 'utf8', windowsHide: true }).toString().split('\n')[1]?.trim() || '';
-      } catch (e) {
-        return '';
-      }
-    },
-    Disk: () => {
-      try {
-        return execSync('wmic logicaldisk where "DriveType=3" get DeviceID', { timeout: 5000, encoding: 'utf8', windowsHide: true }).toString().split('\n')[1]?.trim() || '';
-      } catch (e) {
-        return '';
-      }
-    },
-    GPU: () => {
-      try {
-        return execSync('wmic path win32_videocontroller get name', { timeout: 5000, encoding: 'utf8', windowsHide: true }).toString().split('\n')[1]?.trim() || '';
-      } catch (e) {
-        return '';
-      }
-    },
-    Network: () => {
-      try {
-        return execSync('wmic nicconfig where "IPEnabled=true" get Description', { timeout: 5000, encoding: 'utf8', windowsHide: true }).toString().split('\n')[1]?.trim() || '';
-      } catch (e) {
-        return '';
-      }
-    },
+  const tests: Record<string, string> = {
+    CPU: 'wmic cpu get name',
+    RAM: 'wmic os get TotalVisibleMemorySize',
+    Disk: 'wmic logicaldisk where "DriveType=3" get DeviceID',
+    GPU: 'wmic path win32_videocontroller get name',
+    Network: 'wmic nicconfig where "IPEnabled=true" get Description',
   };
 
   let allPassed = true;
 
-  for (const [name, test] of Object.entries(tests)) {
+  for (const [name, cmd] of Object.entries(tests)) {
     try {
-      const result = test();
+      const raw = await runCmd(cmd, { timeout: 5000 });
+      const result = raw.split('\n')[1]?.trim() || '';
       if (!result || result.length === 0) {
         console.error(`✗ ${name} data not accessible`);
         allPassed = false;

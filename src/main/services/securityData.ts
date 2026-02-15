@@ -1,7 +1,8 @@
-import { execSync, execFile } from 'child_process';
+import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
 import { getExecOptions } from './execOptions';
 const execFileP = promisify(execFile);
+const execAsync = promisify(exec);
 
 /**
  * Helper function to execute PowerShell commands with proper error handling
@@ -69,7 +70,7 @@ export interface SecurityStatus {
 export async function getSecurityStatus(): Promise<SecurityStatus> {
   try {
     // Check firewall status (all profiles)
-    const firewallCmd = `(netsh advfirewall show allprofiles state | Select-String "ON").Count -gt 0`;
+    const firewallCmd = `(Get-NetFirewallProfile -ErrorAction SilentlyContinue | Where-Object { $_.Enabled -eq $true }).Count -gt 0`;
     const firewallStr = await execPowerShell(firewallCmd);
     const firewallEnabled = firewallStr === 'True';
 
@@ -96,7 +97,7 @@ export async function getSecurityStatus(): Promise<SecurityStatus> {
     const smbv1Enabled = smbStr === 'Enabled';
 
     // Get suspicious scheduled tasks (non-Microsoft tasks)
-    const tasksCmd = `schtasks /query /fo CSV | ConvertFrom-Csv | Where-Object {$_.Author -notlike '*Microsoft*' -and $_.TaskName -notlike "\\Microsoft\\*"} | Select-Object TaskName,Author | ConvertTo-Json`;
+    const tasksCmd = `Get-ScheduledTask -EA SilentlyContinue | Where-Object { $_.Author -and $_.Author -notlike '*Microsoft*' -and $_.TaskPath -notlike '\\Microsoft\\*' } | Select-Object @{N='TaskName';E={$_.TaskName}},@{N='Author';E={$_.Author}} | ConvertTo-Json -Compress`;
     const tasksStr = await execPowerShell(tasksCmd);
     let suspiciousTasks: SuspiciousTask[] = [];
 
@@ -147,7 +148,7 @@ export async function getSecurityStatus(): Promise<SecurityStatus> {
  */
 export async function enableFirewall(): Promise<boolean> {
   try {
-    execSync('netsh advfirewall set allprofiles state on', { windowsHide: true });
+    await execAsync('netsh advfirewall set allprofiles state on', { windowsHide: true, timeout: 10000 });
     return true;
   } catch (error: any) {
     console.error('Error enabling firewall:', error);

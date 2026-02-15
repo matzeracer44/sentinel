@@ -195,7 +195,7 @@ export function registerVaultHandlers(): void {
   // ─── ARGUS Health ───
   ipcMain.handle(IPC.VAULT.ARGUS_HEALTH, async () => {
     try {
-      const info = getArgusManager().getHealthInfo();
+      const info = await getArgusManager().getHealthInfoLive();
       return { success: true, data: info };
     } catch (err) {
       return { success: false, error: serializeError(err) };
@@ -231,9 +231,9 @@ export function registerVaultHandlers(): void {
     try {
       const cmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
       const build = spawn(cmd, ['run', 'build'], { cwd: process.cwd() });
-      build.stdout.on('data', (d) => { try { mainWindow?.webContents.send(IPC.RENDERER.BUILD_LOG, d.toString()); } catch {} });
-      build.stderr.on('data', (d) => { try { mainWindow?.webContents.send(IPC.RENDERER.BUILD_LOG, d.toString()); } catch {} });
-      build.on('close', (code) => { try { mainWindow?.webContents.send(IPC.RENDERER.BUILD_DONE, { success: code === 0, code }); } catch {} });
+      build.stdout.on('data', (d) => { try { mainWindow?.webContents.send(IPC.RENDERER.BUILD_LOG, d.toString()); } catch { /* window may be closed */ } });
+      build.stderr.on('data', (d) => { try { mainWindow?.webContents.send(IPC.RENDERER.BUILD_LOG, d.toString()); } catch { /* window may be closed */ } });
+      build.on('close', (code) => { try { mainWindow?.webContents.send(IPC.RENDERER.BUILD_DONE, { success: code === 0, code }); } catch { /* window may be closed */ } });
       return { success: true, message: 'Build started' };
     } catch (err) {
       return { success: false, error: serializeError(err) };

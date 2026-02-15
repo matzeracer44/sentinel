@@ -94,9 +94,9 @@ function expandPaths(): string[] {
           const entries = fs.readdirSync(p);
           for (const e of entries) {
             const fp = path.join(p, e);
-            try { if (fs.statSync(fp).isFile()) files.push(fp); } catch { /* */ }
+            try { if (fs.statSync(fp).isFile()) files.push(fp); } catch { /* stat may fail for locked/deleted files */ }
           }
-        } catch { /* */ }
+        } catch { /* dir may be inaccessible */ }
       }
     }
   }
@@ -107,9 +107,9 @@ function expandPaths(): string[] {
         const entries = fs.readdirSync(wd.dir);
         for (const e of entries) {
           const fp = path.join(wd.dir, e);
-          try { if (fs.statSync(fp).isFile()) files.push(fp); } catch { /* */ }
+          try { if (fs.statSync(fp).isFile()) files.push(fp); } catch { /* stat may fail for locked/deleted files */ }
         }
-      } catch { /* */ }
+      } catch { /* dir may be inaccessible */ }
     }
   }
 
@@ -122,7 +122,7 @@ function saveBaseline(): void {
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     const arr = Array.from(_baseline.values());
     fs.writeFileSync(_baselinePath(), JSON.stringify(arr, null, 2), 'utf8');
-  } catch { /* */ }
+  } catch (e: any) { console.warn('[FIM] Failed to save baseline:', e?.message); }
 }
 
 function loadBaseline(): void {
@@ -132,7 +132,7 @@ function loadBaseline(): void {
       _baseline.clear();
       for (const e of arr) _baseline.set(e.path, e);
     }
-  } catch { /* */ }
+  } catch (e: any) { console.warn('[FIM] Failed to load baseline:', e?.message); }
 }
 
 function saveChanges(): void {
@@ -140,7 +140,7 @@ function saveChanges(): void {
     const dir = _dataDir();
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(_changesPath(), JSON.stringify(_changes.slice(-500), null, 2), 'utf8');
-  } catch { /* */ }
+  } catch (e: any) { console.warn('[FIM] Failed to save changes:', e?.message); }
 }
 
 function loadChanges(): void {
@@ -157,7 +157,7 @@ function loadConfig(): void {
       const saved = JSON.parse(fs.readFileSync(_configPath(), 'utf8'));
       _config = { ..._config, ...saved };
     }
-  } catch { /* */ }
+  } catch (e: any) { console.warn('[FIM] Failed to load config:', e?.message); }
 }
 
 function saveConfig(): void {
@@ -165,7 +165,7 @@ function saveConfig(): void {
     const dir = _dataDir();
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(_configPath(), JSON.stringify(_config, null, 2), 'utf8');
-  } catch { /* */ }
+  } catch (e: any) { console.warn('[FIM] Failed to save config:', e?.message); }
 }
 
 /**
@@ -187,7 +187,7 @@ export function runCheck(): FimChange[] {
       const stat = fs.statSync(fp);
       size = stat.size;
       mtime = stat.mtime.toISOString();
-    } catch { /* */ }
+    } catch { /* file may have been deleted between scan and stat */ }
 
     const existing = _baseline.get(fp);
 
@@ -266,7 +266,7 @@ export function initFim(): void {
       try {
         const stat = fs.statSync(fp);
         _baseline.set(fp, { path: fp, hash, size: stat.size, mtime: stat.mtime.toISOString() });
-      } catch { /* */ }
+      } catch { /* file may vanish between hash and stat */ }
     }
     saveBaseline();
   }
@@ -312,7 +312,7 @@ export function resetBaseline(): void {
     try {
       const stat = fs.statSync(fp);
       _baseline.set(fp, { path: fp, hash, size: stat.size, mtime: stat.mtime.toISOString() });
-    } catch { /* */ }
+    } catch { /* file may vanish between hash and stat */ }
   }
   saveBaseline();
   _changes = [];

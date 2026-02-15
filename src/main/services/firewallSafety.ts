@@ -1,8 +1,16 @@
 // Firewall service with safety checks, internet testing, and undo/redo
+import { exec } from 'child_process';
+import { promisify } from 'util';
 import { addActivityLog } from './activityLog';
 import { loadFirewallStacks, persistFirewallStacks } from './firewallHistoryStore';
 import { performConnectivityCheck, type ConnectivityResult } from './connectivityCheck';
 import { addSentinelRule } from './shieldData';
+
+const execAsync = promisify(exec);
+async function runNetsh(cmd: string): Promise<string> {
+  const { stdout } = await execAsync(cmd, { encoding: 'utf8', windowsHide: true, timeout: 10000 });
+  return (stdout || '').trim();
+}
 
 export interface FirewallAction {
   id: string;
@@ -26,39 +34,32 @@ export async function blockProcessByPid(
     return { success: false, message: 'Invalid PID (must be a non-negative integer)' };
   }
 
-  const { execSync } = require('child_process');
   const isSystemPid = pid === 0;
 
-  const resolveProcessPath = (): string | null => {
+  const resolveProcessPath = async (): Promise<string | null> => {
     try {
-      const psCommand =
-        `powershell -ExecutionPolicy Bypass -NoProfile -Command "` +
-        `(Get-Process -Id ${pid} -ErrorAction Stop | Select-Object -First 1 -Property Path).Path"`;
-      const output = execSync(psCommand, {
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'pipe'],
-        windowsHide: true,
-      }).trim();
+      const output = (await execAsync(
+        `powershell -ExecutionPolicy Bypass -NoProfile -Command "(Get-Process -Id ${pid} -ErrorAction Stop | Select-Object -First 1 -Property Path).Path"`,
+        { encoding: 'utf8', windowsHide: true, timeout: 5000 }
+      )).stdout.trim();
       if (output) return output;
-    } catch {}
+    } catch { /* process path lookup may fail */ }
 
     try {
-      const wmicOutput = execSync(`wmic process where processid=${pid} get ExecutablePath /value`, {
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'pipe'],
-        windowsHide: true,
-      });
+      const wmicOutput = (await execAsync(`wmic process where processid=${pid} get ExecutablePath /value`, {
+        encoding: 'utf8', windowsHide: true, timeout: 5000,
+      })).stdout;
       const match = wmicOutput.match(/ExecutablePath=(.*)/i);
       if (match && match[1]) {
         const path = match[1].trim();
         if (path) return path;
       }
-    } catch {}
+    } catch { /* process path lookup may fail */ }
 
     return null;
   };
 
-  const processPath = isSystemPid ? null : resolveProcessPath();
+  const processPath = isSystemPid ? null : await resolveProcessPath();
   if (!isSystemPid && !processPath) {
     return { success: false, message: `Unable to resolve executable for PID ${pid}` };
   }
@@ -74,7 +75,7 @@ export async function blockProcessByPid(
       const command = isSystemPid
         ? `netsh advfirewall firewall add rule name="${ruleName}" dir=${dir} action=block service=system enable=yes`
         : `netsh advfirewall firewall add rule name="${ruleName}" dir=${dir} action=block program="${processPath}" enable=yes`;
-      execSync(command, { windowsHide: true });
+      await runNetsh(command);
       ruleNames.push(ruleName);
     }
 
@@ -186,26 +187,15 @@ export async function safeBlockPort(
     // 2. Create firewall rule
     const ruleName = `Sentinel Block Port ${port}/${protocol}`;
 
-    const { execSync } = require('child_process');
     if (direction === 'both') {
-      // Create both IN and OUT rules
       const inboundName = `${ruleName} IN`;
-      execSync(
-        `netsh advfirewall firewall add rule name="${inboundName}" dir=in action=block protocol=${protocol} localport=${port}${remoteConstraint} enable=yes`,
-        { windowsHide: true }
-      );
+      await runNetsh(`netsh advfirewall firewall add rule name="${inboundName}" dir=in action=block protocol=${protocol} localport=${port}${remoteConstraint} enable=yes`);
       createdRuleNames.push(inboundName);
       const outboundName = `${ruleName} OUT`;
-      execSync(
-        `netsh advfirewall firewall add rule name="${outboundName}" dir=out action=block protocol=${protocol} localport=${port}${remoteConstraint} enable=yes`,
-        { windowsHide: true }
-      );
+      await runNetsh(`netsh advfirewall firewall add rule name="${outboundName}" dir=out action=block protocol=${protocol} localport=${port}${remoteConstraint} enable=yes`);
       createdRuleNames.push(outboundName);
     } else {
-      execSync(
-        `netsh advfirewall firewall add rule name="${ruleName}" dir=${direction === 'in' ? 'in' : 'out'} action=block protocol=${protocol} localport=${port}${remoteConstraint} enable=yes`,
-        { windowsHide: true }
-      );
+      await runNetsh(`netsh advfirewall firewall add rule name="${ruleName}" dir=${direction === 'in' ? 'in' : 'out'} action=block protocol=${protocol} localport=${port}${remoteConstraint} enable=yes`);
       createdRuleNames.push(ruleName);
     }
 
@@ -218,30 +208,14 @@ export async function safeBlockPort(
     // 5. Rollback if internet broken
     if (internetBefore && !internetAfter) {
       if (direction === 'both') {
-        execSync(`netsh advfirewall firewall delete rule name="${ruleName} IN" dir=in`, {
-          windowsHide: true,
-        });
-        execSync(`netsh advfirewall firewall delete rule name="${ruleName} OUT" dir=out`, {
-          windowsHide: true,
-        });
+        await runNetsh(`netsh advfirewall firewall delete rule name="${ruleName} IN" dir=in`);
+        await runNetsh(`netsh advfirewall firewall delete rule name="${ruleName} OUT" dir=out`);
       } else {
-        execSync(`netsh advfirewall firewall delete rule name="${ruleName}"`, {
-          windowsHide: true,
-        });
+        await runNetsh(`netsh advfirewall firewall delete rule name="${ruleName}"`);
       }
 
-      addActivityLog(
-        'Shield',
-        'Block Port',
-        `Rollback: Blocking port ${port} broke internet, rule deleted`,
-        'error'
-      );
-
-      return {
-        success: false,
-        message: `Block would break internet. Rolled back.`,
-        rollback: true,
-      };
+      addActivityLog('Shield', 'Block Port', `Rollback: Blocking port ${port} broke internet, rule deleted`, 'error');
+      return { success: false, message: `Block would break internet. Rolled back.`, rollback: true };
     }
 
     // 6a. Track created firewall rules for orchestrator visibility
@@ -386,23 +360,13 @@ export async function blockSubnet(
     }
 
     // Create firewall rules
-    const { execSync } = require('child_process');
     const ruleName = `Sentinel Block Subnet ${subnet}`;
 
     if (direction === 'both') {
-      execSync(
-        `netsh advfirewall firewall add rule name="${ruleName} IN" dir=in action=block remoteip=${subnet} enable=yes`,
-        { windowsHide: true }
-      );
-      execSync(
-        `netsh advfirewall firewall add rule name="${ruleName} OUT" dir=out action=block remoteip=${subnet} enable=yes`,
-        { windowsHide: true }
-      );
+      await runNetsh(`netsh advfirewall firewall add rule name="${ruleName} IN" dir=in action=block remoteip=${subnet} enable=yes`);
+      await runNetsh(`netsh advfirewall firewall add rule name="${ruleName} OUT" dir=out action=block remoteip=${subnet} enable=yes`);
     } else {
-      execSync(
-        `netsh advfirewall firewall add rule name="${ruleName}" dir=${direction === 'in' ? 'in' : 'out'} action=block remoteip=${subnet} enable=yes`,
-        { windowsHide: true }
-      );
+      await runNetsh(`netsh advfirewall firewall add rule name="${ruleName}" dir=${direction === 'in' ? 'in' : 'out'} action=block remoteip=${subnet} enable=yes`);
     }
 
     // Wait for rule to apply
@@ -414,16 +378,10 @@ export async function blockSubnet(
       if (!internetAfter) {
         // Rollback
         if (direction === 'both') {
-          try {
-            execSync(`netsh advfirewall firewall delete rule name="${ruleName} IN" dir=in`, { windowsHide: true });
-          } catch {}
-          try {
-            execSync(`netsh advfirewall firewall delete rule name="${ruleName} OUT" dir=out`, { windowsHide: true });
-          } catch {}
+          try { await runNetsh(`netsh advfirewall firewall delete rule name="${ruleName} IN" dir=in`); } catch { /* rule may not exist */ }
+          try { await runNetsh(`netsh advfirewall firewall delete rule name="${ruleName} OUT" dir=out`); } catch { /* rule may not exist */ }
         } else {
-          try {
-            execSync(`netsh advfirewall firewall delete rule name="${ruleName}"`, { windowsHide: true });
-          } catch {}
+          try { await runNetsh(`netsh advfirewall firewall delete rule name="${ruleName}"`); } catch { /* rule may not exist */ }
         }
 
         addActivityLog('Shield', 'Block Subnet', `Rollback: Blocking ${subnet} broke internet connectivity`, 'error');
@@ -466,48 +424,20 @@ export async function undoFirewallAction(): Promise<{ success: boolean; message:
     redoStack.push(action);
     await persistStacks();
 
-    const { execSync } = require('child_process');
-
     if (action.type === 'block-port') {
       const { ruleName } = action.details;
-      try {
-        execSync(`netsh advfirewall firewall delete rule name="${ruleName} IN" dir=in`, {
-          windowsHide: true,
-        });
-      } catch {}
-      try {
-        execSync(`netsh advfirewall firewall delete rule name="${ruleName} OUT" dir=out`, {
-          windowsHide: true,
-        });
-      } catch {}
-      try {
-        execSync(`netsh advfirewall firewall delete rule name="${ruleName}"`, {
-          windowsHide: true,
-        });
-      } catch {}
+      try { await runNetsh(`netsh advfirewall firewall delete rule name="${ruleName} IN" dir=in`); } catch { /* rule may not exist */ }
+      try { await runNetsh(`netsh advfirewall firewall delete rule name="${ruleName} OUT" dir=out`); } catch { /* rule may not exist */ }
+      try { await runNetsh(`netsh advfirewall firewall delete rule name="${ruleName}"`); } catch { /* rule may not exist */ }
     } else if (action.type === 'block-subnet') {
       const { ruleName } = action.details;
-      try {
-        execSync(`netsh advfirewall firewall delete rule name="${ruleName} IN" dir=in`, {
-          windowsHide: true,
-        });
-      } catch {}
-      try {
-        execSync(`netsh advfirewall firewall delete rule name="${ruleName} OUT" dir=out`, {
-          windowsHide: true,
-        });
-      } catch {}
-      try {
-        execSync(`netsh advfirewall firewall delete rule name="${ruleName}"`, {
-          windowsHide: true,
-        });
-      } catch {}
+      try { await runNetsh(`netsh advfirewall firewall delete rule name="${ruleName} IN" dir=in`); } catch { /* rule may not exist */ }
+      try { await runNetsh(`netsh advfirewall firewall delete rule name="${ruleName} OUT" dir=out`); } catch { /* rule may not exist */ }
+      try { await runNetsh(`netsh advfirewall firewall delete rule name="${ruleName}"`); } catch { /* rule may not exist */ }
     } else if (action.type === 'block-program') {
       const { ruleNames } = action.details;
       for (const name of ruleNames || []) {
-        try {
-          execSync(`netsh advfirewall firewall delete rule name="${name}"`, { windowsHide: true });
-        } catch {}
+        try { await runNetsh(`netsh advfirewall firewall delete rule name="${name}"`); } catch { /* rule may not exist */ }
       }
     }
 
@@ -531,53 +461,34 @@ export async function redoFirewallAction(): Promise<{ success: boolean; message:
     undoStack.push(action);
     await persistStacks();
 
-    const { execSync } = require('child_process');
-
     if (action.type === 'block-port') {
       const { port, protocol, direction, ruleName, loopbackOnly } = action.details;
       const remoteConstraint = loopbackOnly ? ' remoteip=127.0.0.1,::1' : '';
       if (direction === 'both') {
-        execSync(
-          `netsh advfirewall firewall add rule name="${ruleName} IN" dir=in action=block protocol=${protocol} localport=${port}${remoteConstraint} enable=yes`,
-          { windowsHide: true }
-        );
-        execSync(
-          `netsh advfirewall firewall add rule name="${ruleName} OUT" dir=out action=block protocol=${protocol} localport=${port}${remoteConstraint} enable=yes`,
-          { windowsHide: true }
-        );
+        await runNetsh(`netsh advfirewall firewall add rule name="${ruleName} IN" dir=in action=block protocol=${protocol} localport=${port}${remoteConstraint} enable=yes`);
+        await runNetsh(`netsh advfirewall firewall add rule name="${ruleName} OUT" dir=out action=block protocol=${protocol} localport=${port}${remoteConstraint} enable=yes`);
       } else {
-        execSync(
-          `netsh advfirewall firewall add rule name="${ruleName}" dir=${direction === 'in' ? 'in' : 'out'} action=block protocol=${protocol} localport=${port}${remoteConstraint} enable=yes`,
-          { windowsHide: true }
-        );
+        await runNetsh(`netsh advfirewall firewall add rule name="${ruleName}" dir=${direction === 'in' ? 'in' : 'out'} action=block protocol=${protocol} localport=${port}${remoteConstraint} enable=yes`);
       }
     } else if (action.type === 'block-subnet') {
       const { subnet, direction, ruleName } = action.details;
       if (direction === 'both') {
-        execSync(
-          `netsh advfirewall firewall add rule name="${ruleName} IN" dir=in action=block remoteip=${subnet} enable=yes`,
-          { windowsHide: true }
-        );
-        execSync(
-          `netsh advfirewall firewall add rule name="${ruleName} OUT" dir=out action=block remoteip=${subnet} enable=yes`,
-          { windowsHide: true }
-        );
+        await runNetsh(`netsh advfirewall firewall add rule name="${ruleName} IN" dir=in action=block remoteip=${subnet} enable=yes`);
+        await runNetsh(`netsh advfirewall firewall add rule name="${ruleName} OUT" dir=out action=block remoteip=${subnet} enable=yes`);
       } else {
-        execSync(
-          `netsh advfirewall firewall add rule name="${ruleName}" dir=${direction === 'in' ? 'in' : 'out'} action=block remoteip=${subnet} enable=yes`,
-          { windowsHide: true }
-        );
+        await runNetsh(`netsh advfirewall firewall add rule name="${ruleName}" dir=${direction === 'in' ? 'in' : 'out'} action=block remoteip=${subnet} enable=yes`);
       }
     } else if (action.type === 'block-program') {
       const { processPath, direction, ruleNames = [], service } = action.details;
       const directions = direction === 'both' ? ['in', 'out'] : [direction];
-      directions.forEach((dir: 'in' | 'out', idx: number) => {
+      for (let idx = 0; idx < directions.length; idx++) {
+        const dir = directions[idx];
         const ruleName = ruleNames[idx] || `${action.id}-${dir}`;
         const command = service === 'system'
           ? `netsh advfirewall firewall add rule name="${ruleName}" dir=${dir} action=block service=system enable=yes`
           : `netsh advfirewall firewall add rule name="${ruleName}" dir=${dir} action=block program="${processPath}" enable=yes`;
-        execSync(command, { windowsHide: true });
-      });
+        await runNetsh(command);
+      }
     }
 
     addActivityLog('Shield', 'Redo', `Redid: ${action.type}`, 'success');

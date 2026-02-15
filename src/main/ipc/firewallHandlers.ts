@@ -4,12 +4,20 @@
  */
 
 import { ipcMain, BrowserWindow } from 'electron';
-import { execSync } from 'child_process';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+const execAsyncFw = promisify(exec);
+async function runNetsh(cmd: string): Promise<string> {
+  const { stdout } = await execAsyncFw(cmd, { encoding: 'utf8', windowsHide: true, timeout: 10000 });
+  return (stdout || '').trim();
+}
 import { IPC } from '../../shared/constants';
 import {
   BlockPortSchema,
   BlockSubnetSchema,
   BlockPidSchema,
+  BlockIPSchema,
+  UnblockIPSchema,
   StageFirewallRuleSchema,
   CommitPendingRuleSchema,
   DismissPendingRuleSchema,
@@ -81,7 +89,7 @@ export function registerFirewallHandlers(): void {
   ipcMain.handle(IPC.FIREWALL.GET_RULES, async () => {
     try {
       const { aggregateFirewallRules } = await import('./shieldHandlers');
-      const aggregation = aggregateFirewallRules();
+      const aggregation = await aggregateFirewallRules();
       return { success: true, rules: aggregation.rules, meta: aggregation.meta };
     } catch (err) {
       return { success: false, error: serializeError(err), rules: [] };
@@ -92,7 +100,7 @@ export function registerFirewallHandlers(): void {
   ipcMain.handle(IPC.FIREWALL.GET_INVENTORY, async () => {
     try {
       const { aggregateFirewallRules } = await import('./shieldHandlers');
-      const aggregation = aggregateFirewallRules();
+      const aggregation = await aggregateFirewallRules();
       let blockedIps: unknown[] = [];
       let blockedIpsError: string | null = null;
       try {
@@ -156,12 +164,22 @@ export function registerFirewallHandlers(): void {
 
   // ─── Block IP ───
   ipcMain.handle(IPC.FIREWALL.BLOCK_IP, async (_event, ip: string, reason: string) => {
-    return blockIP(ip, reason);
+    try {
+      const parsed = BlockIPSchema.parse({ ip, reason });
+      return blockIP(parsed.ip, parsed.reason);
+    } catch (err) {
+      return { success: false, message: 'Invalid IP or reason', error: serializeError(err) };
+    }
   });
 
   // ─── Unblock IP ───
   ipcMain.handle(IPC.FIREWALL.UNBLOCK_IP, async (_event, ip: string) => {
-    return unblockIP(ip);
+    try {
+      const parsed = UnblockIPSchema.parse({ ip });
+      return unblockIP(parsed.ip);
+    } catch (err) {
+      return { success: false, message: 'Invalid IP address', error: serializeError(err) };
+    }
   });
 
   // ─── Get Blocked IPs ───
@@ -193,12 +211,12 @@ export function registerFirewallHandlers(): void {
 
       // Inbound
       const cmdIn = `netsh advfirewall firewall add rule name="${ruleName} IN" dir=in action=block remoteip=${subnet} enable=yes`;
-      execSync(cmdIn, { windowsHide: true });
+      await runNetsh(cmdIn);
       addSentinelRule(`${ruleName} IN`);
 
       // Outbound
       const cmdOut = `netsh advfirewall firewall add rule name="${ruleName} OUT" dir=out action=block remoteip=${subnet} enable=yes`;
-      execSync(cmdOut, { windowsHide: true });
+      await runNetsh(cmdOut);
       addSentinelRule(`${ruleName} OUT`);
 
       addActivityLog('firewall', 'block-ip-subnet', `Blocked subnet: ${subnet} (${ipCount})`, 'success');
@@ -217,8 +235,8 @@ export function registerFirewallHandlers(): void {
     }
     try {
       const ruleName = `Sentinel Block Subnet ${subnet}`;
-      try { await deleteFirewallRule(`${ruleName} IN`); } catch {}
-      try { await deleteFirewallRule(`${ruleName} OUT`); } catch {}
+      try { await deleteFirewallRule(`${ruleName} IN`); } catch { /* rule may not exist */ }
+      try { await deleteFirewallRule(`${ruleName} OUT`); } catch { /* rule may not exist */ }
       addActivityLog('firewall', 'unblock-subnet', `Unblocked subnet: ${subnet}`, 'success');
       return { success: true, message: `Successfully unblocked subnet ${subnet}` };
     } catch (error) {
@@ -231,7 +249,7 @@ export function registerFirewallHandlers(): void {
   // ─── Delete Firewall Rule ───
   ipcMain.handle(IPC.FIREWALL.DELETE_RULE, async (_event, ruleName: string) => {
     try {
-      execSync(`netsh advfirewall firewall delete rule name="${ruleName}"`, { stdio: 'ignore' });
+      await runNetsh(`netsh advfirewall firewall delete rule name="${ruleName}"`);
       addActivityLog('firewall', 'delete-rule', `Deleted firewall rule: ${ruleName}`, 'info');
       return { success: true, message: `Deleted rule: ${ruleName}` };
     } catch (err) {

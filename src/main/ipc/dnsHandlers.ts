@@ -4,9 +4,12 @@
 
 import { ipcMain } from 'electron';
 import * as fs from 'fs';
-import { execSync } from 'child_process';
+import { exec } from 'child_process';
+import { promisify } from 'util';
 import { IPC } from '../../shared/constants';
 import { serializeError } from '../../shared/utils';
+
+const execAsync = promisify(exec);
 
 let isAdmin = false;
 
@@ -18,7 +21,7 @@ export function registerDnsHandlers(): void {
   // ─── Get Current DNS ───
   ipcMain.handle(IPC.DNS.GET_CURRENT, async () => {
     try {
-      execSync('ipconfig /all', { encoding: 'utf-8' });
+      await execAsync('ipconfig /all', { encoding: 'utf-8', windowsHide: true, timeout: 5000 });
       return { success: true, primary: '8.8.8.8', secondary: '8.8.4.4', name: 'Current DNS' };
     } catch (err) {
       return { success: false, error: serializeError(err) };
@@ -50,7 +53,27 @@ export function registerDnsHandlers(): void {
   ipcMain.handle(IPC.DNS.SAVE_HOSTS_FILE, async (_event, content: string) => {
     if (!isAdmin) return { success: false, error: 'Admin privileges required' };
     try {
+      if (typeof content !== 'string') return { success: false, error: 'Content must be a string' };
+      if (content.length > 512 * 1024) return { success: false, error: 'Hosts file content exceeds 512KB limit' };
+
+      // Validate each non-empty, non-comment line matches hosts file format
+      const lines = content.split('\n');
+      const HOSTS_LINE = /^\s*(?:#.*|(?:\d{1,3}\.){3}\d{1,3}\s+[a-zA-Z0-9][a-zA-Z0-9.\-]*[a-zA-Z0-9](?:\s+#.*)?)?\s*$/;
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].replace(/\r$/, '');
+        if (line.trim() === '' || line.trim().startsWith('#')) continue;
+        if (!HOSTS_LINE.test(line)) {
+          return { success: false, error: `Invalid hosts entry at line ${i + 1}: ${line.slice(0, 80)}` };
+        }
+      }
+
       const hostsPath = 'C:\\Windows\\System32\\drivers\\etc\\hosts';
+      // Create backup before overwriting
+      try {
+        const backup = fs.readFileSync(hostsPath, 'utf8');
+        fs.writeFileSync(hostsPath + '.sentinel-backup', backup, 'utf8');
+      } catch { /* backup is best-effort */ }
+
       fs.writeFileSync(hostsPath, content, 'utf8');
       return { success: true, message: 'Hosts file saved' };
     } catch (err) {

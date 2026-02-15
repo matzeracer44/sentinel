@@ -102,14 +102,19 @@ class Argus:
         )
         self.logger = logging.getLogger('argus')
     
-    SCAN_TIMEOUT = 45  # seconds — hard limit so Flask never hangs
+    SCAN_TIMEOUT_PASSIVE = 45   # seconds — passive scan (DNS/WHOIS/SSL/GeoIP/ThreatIntel)
+    SCAN_TIMEOUT_DEEP    = 90   # seconds — deep scan adds HTTP fetch + redirect chain + content
 
-    def scan_url(self, url: str, force: bool = False) -> dict:
-        """Scan a single URL for threats. Uses cache unless force=True."""
-        self.logger.info(f"Scanning URL: {url}")
+    def scan_url(self, url: str, force: bool = False,
+                 deep_fetch: bool = False) -> dict:
+        """Scan a single URL for threats. Uses cache unless force=True.
+        deep_fetch=False: passive analysis (DNS/WHOIS/SSL/GeoIP/ThreatIntel).
+        deep_fetch=True:  full analysis including HTTP content fetch."""
+        timeout = self.SCAN_TIMEOUT_DEEP if deep_fetch else self.SCAN_TIMEOUT_PASSIVE
+        self.logger.info(f"Scanning URL: {url} (deep_fetch={deep_fetch}, timeout={timeout}s)")
         
-        # Check cache first (skip if forced re-scan)
-        if not force:
+        # Check cache first (skip if forced re-scan or deep_fetch upgrade)
+        if not force and not deep_fetch:
             cached = self.scan_cache.get(url)
             if cached:
                 self.logger.info(f"Cache hit for {url}")
@@ -122,23 +127,23 @@ class Argus:
 
         def _do_scan():
             try:
-                result_box[0] = self.url_detector.analyze_url(url)
+                result_box[0] = self.url_detector.analyze_url(url, deep_fetch=deep_fetch)
             except Exception as e:
                 error_box[0] = e
 
         t = threading.Thread(target=_do_scan, daemon=True)
         t.start()
-        t.join(timeout=self.SCAN_TIMEOUT)
+        t.join(timeout=timeout)
 
         if t.is_alive():
-            self.logger.warning(f"Scan timed out after {self.SCAN_TIMEOUT}s for {url}")
+            self.logger.warning(f"Scan timed out after {timeout}s for {url}")
             return {
                 'url': url,
                 'threat_level': 'UNKNOWN',
                 'threat_score': 0,
-                'reasons': [f'Scan timed out after {self.SCAN_TIMEOUT}s'],
+                'reasons': [f'Scan timed out after {timeout}s'],
                 'intel': {},
-                'error': f'Scan timed out after {self.SCAN_TIMEOUT} seconds'
+                'error': f'Scan timed out after {timeout} seconds'
             }
 
         if error_box[0]:
@@ -175,13 +180,13 @@ class Argus:
             self.logger.error(f"URL scan post-processing failed: {e}")
             return result
     
-    def scan_urls(self, urls: list) -> list:
+    def scan_urls(self, urls: list, deep_fetch: bool = False) -> list:
         """Scan multiple URLs"""
-        self.logger.info(f"Scanning {len(urls)} URLs")
+        self.logger.info(f"Scanning {len(urls)} URLs (deep_fetch={deep_fetch})")
         
         results = []
         for url in urls:
-            result = self.scan_url(url)
+            result = self.scan_url(url, deep_fetch=deep_fetch)
             results.append(result)
         
         return results
@@ -229,8 +234,12 @@ class Argus:
             raise
     
     def cleanup(self):
-        """Cleanup resources — clear ephemeral scan cache"""
+        """Cleanup resources — close network sessions + clear ephemeral scan cache"""
         self.logger.info("ARGUS shutting down")
+        try:
+            self.url_detector.close_sessions()
+        except Exception:
+            pass
         self.scan_cache.clear()
 
 def main():

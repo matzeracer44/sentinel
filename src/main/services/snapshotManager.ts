@@ -1,13 +1,31 @@
-import { execSync } from 'child_process';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { app } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
 import { getExecOptions } from './execOptions';
 
-function execPowerShell(command: string): string {
+const execFileAsync = promisify(execFile);
+
+/**
+ * Validate snapshot ID — only allow alphanumeric, hyphens, underscores.
+ * Prevents path traversal (e.g. ../../etc/passwd).
+ */
+function validateSnapshotId(id: string): string {
+  const safe = id.replace(/[^a-zA-Z0-9_-]/g, '');
+  if (!safe || safe !== id) throw new Error(`Invalid snapshot ID: ${id}`);
+  return safe;
+}
+
+async function execPowerShell(command: string): Promise<string> {
   try {
-    const fullCommand = `powershell -ExecutionPolicy Bypass -NoProfile -Command "${command}"`;
-    return execSync(fullCommand, getExecOptions()).toString().trim();
+    const encoded = Buffer.from(command, 'utf16le').toString('base64');
+    const { stdout } = await execFileAsync(
+      'powershell',
+      ['-NoLogo', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-NoProfile', '-EncodedCommand', encoded],
+      getExecOptions(),
+    ) as { stdout: string };
+    return (stdout || '').trim();
   } catch (error: any) {
     console.error('PowerShell execution error:', error.message);
     return '';
@@ -48,10 +66,10 @@ export async function createSnapshot(name: string): Promise<SystemSnapshot | nul
     const timestamp = Date.now();
 
     const servicesCmd = `Get-Service | Select-Object Name,StartType,Status | ConvertTo-Json`;
-    const services = execPowerShell(servicesCmd);
+    const services = await execPowerShell(servicesCmd);
 
     const startupCmd = `Get-ItemProperty HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run -ErrorAction SilentlyContinue | ConvertTo-Json`;
-    const startupPrograms = execPowerShell(startupCmd);
+    const startupPrograms = await execPowerShell(startupCmd);
 
     const snapshot: SystemSnapshot = {
       id,
@@ -64,7 +82,7 @@ export async function createSnapshot(name: string): Promise<SystemSnapshot | nul
     };
 
     const filePath = path.join(getSnapshotsDir(), `${id}.json`);
-    fs.writeFileSync(filePath, JSON.stringify(snapshot, null, 2));
+    await fs.promises.writeFile(filePath, JSON.stringify(snapshot, null, 2));
 
     console.log(`✓ Snapshot created: ${name}`);
     return snapshot;
@@ -78,12 +96,12 @@ export async function listSnapshots(): Promise<SystemSnapshot[]> {
   try {
     ensureSnapshotsDir();
 
-    const files = fs.readdirSync(getSnapshotsDir()).filter((f) => f.endsWith('.json'));
+    const files = (await fs.promises.readdir(getSnapshotsDir())).filter((f) => f.endsWith('.json'));
     const snapshots: SystemSnapshot[] = [];
 
     for (const file of files) {
       const filePath = path.join(getSnapshotsDir(), file);
-      const data = fs.readFileSync(filePath, 'utf8');
+      const data = await fs.promises.readFile(filePath, 'utf8');
       snapshots.push(JSON.parse(data));
     }
 
@@ -96,10 +114,11 @@ export async function listSnapshots(): Promise<SystemSnapshot[]> {
 
 export async function deleteSnapshot(id: string): Promise<boolean> {
   try {
-    const filePath = path.join(getSnapshotsDir(), `${id}.json`);
+    const safeId = validateSnapshotId(id);
+    const filePath = path.join(getSnapshotsDir(), `${safeId}.json`);
     if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
-      console.log(`✓ Snapshot deleted: ${id}`);
+      await fs.promises.unlink(filePath);
+      console.log(`✓ Snapshot deleted: ${safeId}`);
       return true;
     }
     return false;
@@ -111,9 +130,10 @@ export async function deleteSnapshot(id: string): Promise<boolean> {
 
 export async function getSnapshot(id: string): Promise<SystemSnapshot | null> {
   try {
-    const filePath = path.join(getSnapshotsDir(), `${id}.json`);
+    const safeId = validateSnapshotId(id);
+    const filePath = path.join(getSnapshotsDir(), `${safeId}.json`);
     if (fs.existsSync(filePath)) {
-      const data = fs.readFileSync(filePath, 'utf8');
+      const data = await fs.promises.readFile(filePath, 'utf8');
       return JSON.parse(data);
     }
     return null;

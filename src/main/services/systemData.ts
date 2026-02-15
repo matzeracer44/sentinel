@@ -1,4 +1,4 @@
-import { exec, execSync } from 'child_process';
+import { exec } from 'child_process';
 import { promisify } from 'util';
 
 const execPromise = promisify(exec);
@@ -22,19 +22,19 @@ function getExecOptions(): { timeout: number; maxBuffer: number; encoding: Buffe
 }
 
 /**
- * CRITICAL: Synchronous PowerShell helper with adaptive timeout
+ * CRITICAL: Async PowerShell helper with adaptive timeout
  * Always uses -ExecutionPolicy Bypass for German Windows compatibility
  */
-function execPowerShellSync(cmd: string): string {
+async function execPowerShellAsync(cmd: string): Promise<string> {
   const opts = getExecOptions();
   try {
-    return execSync(`powershell -ExecutionPolicy Bypass -NoProfile -Command "${cmd}"`, {
+    const { stdout } = await execPromise(`powershell -ExecutionPolicy Bypass -NoProfile -Command "${cmd}"`, {
       timeout: opts.timeout,
       maxBuffer: opts.maxBuffer,
       encoding: 'utf8',
       windowsHide: true,
-      stdio: 'pipe',
-    }).trim();
+    });
+    return (stdout || '').trim();
   } catch (error: any) {
     console.error(`PowerShell error: ${error.message}`);
     return '';
@@ -46,15 +46,14 @@ function execPowerShellSync(cmd: string): string {
  * Returns parsed KEY=VALUE pairs from WMIC /format:list output
  * Works on all Windows locales, no PowerShell escaping issues
  */
-function execWMIC(query: string): Record<string, string> {
+async function execWMIC(query: string): Promise<Record<string, string>> {
   try {
-    const output = execSync(`wmic ${query} /format:list`, {
+    const { stdout } = await execPromise(`wmic ${query} /format:list`, {
       timeout: 10000,
       encoding: 'utf8',
       windowsHide: true,
-    })
-      .toString()
-      .trim();
+    });
+    const output = (stdout || '').trim();
 
     // Parse KEY=VALUE format
     const result: Record<string, string> = {};
@@ -74,15 +73,14 @@ function execWMIC(query: string): Record<string, string> {
 /**
  * Parse multiple WMIC results (for drives, network adapters, etc.)
  */
-function execWMICMultiple(query: string): Record<string, string>[] {
+async function execWMICMultiple(query: string): Promise<Record<string, string>[]> {
   try {
-    const output = execSync(`wmic ${query} /format:list`, {
+    const { stdout } = await execPromise(`wmic ${query} /format:list`, {
       timeout: 10000,
       encoding: 'utf8',
       windowsHide: true,
-    })
-      .toString()
-      .trim();
+    });
+    const output = (stdout || '').trim();
 
     const results: Record<string, string>[] = [];
     let current: Record<string, string> = {};
@@ -117,7 +115,7 @@ function execWMICMultiple(query: string): Record<string, string>[] {
  * Async wrapper for execPowerShell (for backward compatibility)
  */
 async function execPowerShell(command: string): Promise<string> {
-  return execPowerShellSync(command);
+  return execPowerShellAsync(command);
 }
 
 export interface RAMData {
@@ -168,7 +166,7 @@ export interface NetworkInfo {
  * Throws error if data cannot be retrieved - app will not start
  */
 export async function getRealRAM(): Promise<RAMData> {
-  const data = execWMIC('OS get TotalVisibleMemorySize,FreePhysicalMemory');
+  const data = await execWMIC('OS get TotalVisibleMemorySize,FreePhysicalMemory');
 
   if (!data || !data.TotalVisibleMemorySize || !data.FreePhysicalMemory) {
     throw new Error(
@@ -211,7 +209,7 @@ export async function getRealRAM(): Promise<RAMData> {
  * Throws error if data cannot be retrieved - app will not start
  */
 export async function getRealCPU(): Promise<CPUData> {
-  const data = execWMIC('cpu get Name,NumberOfCores,NumberOfLogicalProcessors,LoadPercentage');
+  const data = await execWMIC('cpu get Name,NumberOfCores,NumberOfLogicalProcessors,LoadPercentage');
 
   if (!data || !data.Name) {
     throw new Error(
@@ -250,7 +248,7 @@ export async function getRealCPU(): Promise<CPUData> {
  * Throws error if data cannot be retrieved - app will not start
  */
 export async function getRealDiskInfo(): Promise<DiskData[]> {
-  const diskData = execWMICMultiple('logicaldisk where DriveType=3 get DeviceID,Size,FreeSpace');
+  const diskData = await execWMICMultiple('logicaldisk where DriveType=3 get DeviceID,Size,FreeSpace');
 
   if (!diskData || diskData.length === 0) {
     throw new Error(

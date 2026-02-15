@@ -8,6 +8,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { notify } from '../components/Common/SentinelNotification';
+import { useTranslation } from 'react-i18next';
 import { LegacyScanCheckItem as ScanCheckItem } from '../components/Common/ScanCheckItem';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -40,6 +41,7 @@ interface CurrentDns {
 }
 
 const DnsPage: React.FC = () => {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const [tab, setTab] = useState<Tab>('dns');
   const [currentDns, setCurrentDns] = useState<CurrentDns | null>(null);
@@ -178,10 +180,10 @@ const DnsPage: React.FC = () => {
       {/* ─── Spacy Header ─── */}
       <div className="s-page-header">
         <div className="s-tab-bar">
-          <button className={`s-tab ${tab === 'dns' ? 's-tab-active' : ''}`} onClick={() => setTab('dns')}>DNS Configuration</button>
-          <button className={`s-tab ${tab === 'hosts' ? 's-tab-active' : ''}`} onClick={() => setTab('hosts')}>Hosts File</button>
+          <button className={`s-tab ${tab === 'dns' ? 's-tab-active' : ''}`} onClick={() => setTab('dns')}>{t('dns.tabs.dns')}</button>
+          <button className={`s-tab ${tab === 'hosts' ? 's-tab-active' : ''}`} onClick={() => setTab('hosts')}>{t('dns.tabs.hosts')}</button>
           <button className={`s-tab ${tab === 'privacy' ? 's-tab-active' : ''}`} onClick={() => setTab('privacy')}>
-            Privacy Scan {privResult && <span className="s-tab-badge">{privResult.score}%</span>}
+            {t('dns.tabs.privacy')} {privResult && <span className="s-tab-badge">{privResult.score}%</span>}
           </button>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -191,7 +193,7 @@ const DnsPage: React.FC = () => {
               background: 'rgba(255,190,61,0.06)', border: '1px solid rgba(255,190,61,0.18)',
             }}>
               <span style={{ width: 5, height: 5, borderRadius: '50%', background: 'var(--s-amber)', boxShadow: '0 0 6px var(--s-amber)' }} />
-              <span style={{ fontSize: '0.65rem', fontWeight: 600, color: 'var(--s-amber)' }}>No Admin</span>
+              <span style={{ fontSize: '0.65rem', fontWeight: 600, color: 'var(--s-amber)' }}>{t('admin.limited')}</span>
             </div>
           )}
           {message && <span className={`s-badge ${message.type === 'success' ? 's-badge-green' : 's-badge-red'}`}>{message.text}</span>}
@@ -205,9 +207,9 @@ const DnsPage: React.FC = () => {
             <div className="s-card-spacy" style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
               <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--s-green)', boxShadow: '0 0 8px var(--s-green)', animation: 'pulse-green 2s ease-in-out infinite', flexShrink: 0 }} />
               <div style={{ flex: 1 }}>
-                <div className="s-heading-sm">Current DNS</div>
+                <div className="s-heading-sm">{t('dns.settings.currentDNS')}</div>
                 <div style={{ fontFamily: 'var(--s-font-mono)', fontSize: '0.875rem', marginTop: 4 }}>
-                  {currentDns ? `${currentDns.primary}${currentDns.secondary ? ' / ' + currentDns.secondary : ''}` : 'Loading...'}
+                  {currentDns ? `${currentDns.primary}${currentDns.secondary ? ' / ' + currentDns.secondary : ''}` : t('common.loading')}
                 </div>
                 {currentDns?.adapter && (
                   <div style={{ fontSize: '0.6875rem', color: 'var(--s-text-muted)', marginTop: 2 }}>
@@ -216,9 +218,9 @@ const DnsPage: React.FC = () => {
                 )}
               </div>
               <div style={{ display: 'flex', gap: 8 }}>
-                <button className="s-btn s-btn-ghost s-btn-sm" onClick={fetchData}>↻ Refresh</button>
+                <button className="s-btn s-btn-ghost s-btn-sm" onClick={fetchData}>↻ {t('common.refresh')}</button>
                 {hasBackup && (
-                  <button className="s-btn s-btn-danger s-btn-sm" onClick={handleRollback}>↩ Rollback</button>
+                  <button className="s-btn s-btn-danger s-btn-sm" onClick={handleRollback}>↩ {t('dns.settings.rollback')}</button>
                 )}
               </div>
             </div>
@@ -226,20 +228,20 @@ const DnsPage: React.FC = () => {
             {/* Custom DNS */}
             <div className="s-card-spacy">
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-                <span style={{ fontWeight: 700, fontSize: '0.85rem', fontFamily: 'var(--s-font-display)', background: 'linear-gradient(90deg, var(--s-cyan), rgba(167,139,250,0.8))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>Custom DNS</span>
+                <span style={{ fontWeight: 700, fontSize: '0.85rem', fontFamily: 'var(--s-font-display)', background: 'linear-gradient(90deg, var(--s-cyan), rgba(167,139,250,0.8))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>{t('dns.settings.custom')}</span>
                 <div className="s-section-divider" style={{ flex: 1 }} />
               </div>
               <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end' }}>
                 <div style={{ flex: 1 }}>
-                  <label className="s-caption" style={{ display: 'block', marginBottom: 4 }}>Primary</label>
+                  <label className="s-caption" style={{ display: 'block', marginBottom: 4 }}>{t('dns.settings.primary')}</label>
                   <input className="s-input" placeholder="e.g. 1.1.1.1" value={customPrimary} onChange={(e) => setCustomPrimary(e.target.value)} />
                 </div>
                 <div style={{ flex: 1 }}>
-                  <label className="s-caption" style={{ display: 'block', marginBottom: 4 }}>Secondary</label>
+                  <label className="s-caption" style={{ display: 'block', marginBottom: 4 }}>{t('dns.settings.secondary')}</label>
                   <input className="s-input" placeholder="e.g. 1.0.0.1 (optional)" value={customSecondary} onChange={(e) => setCustomSecondary(e.target.value)} />
                 </div>
                 <button className="s-btn s-btn-primary" onClick={handleSetCustomDns} disabled={!customPrimary.trim() || !isAdmin}>
-                  Apply
+                  {t('common.apply')}
                 </button>
               </div>
             </div>
@@ -247,10 +249,10 @@ const DnsPage: React.FC = () => {
             {/* DNS Presets */}
             <div className="s-flex-between">
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontWeight: 700, fontSize: '0.85rem', fontFamily: 'var(--s-font-display)', background: 'linear-gradient(90deg, var(--s-cyan), var(--s-green))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>DNS Presets</span>
+                <span style={{ fontWeight: 700, fontSize: '0.85rem', fontFamily: 'var(--s-font-display)', background: 'linear-gradient(90deg, var(--s-cyan), var(--s-green))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>{t('dns.settings.provider')}</span>
                 <div className="s-section-divider" style={{ flex: 1, maxWidth: 80 }} />
               </div>
-              <button className="s-btn s-btn-ghost s-btn-sm" onClick={handleTestAll}>Test All Speeds</button>
+              <button className="s-btn s-btn-ghost s-btn-sm" onClick={handleTestAll}>{t('dns.settings.testSpeed')}</button>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 12 }}>
               {presets.map((preset, idx) => {
@@ -270,8 +272,8 @@ const DnsPage: React.FC = () => {
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                       <span style={{ fontWeight: 600, fontSize: '0.875rem' }}>{preset.name}</span>
                       <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                        {isActive && <span className="s-badge s-badge-green" style={{ fontSize: '0.55rem' }}>ACTIVE</span>}
-                        <span className="s-badge s-badge-cyan" style={{ fontSize: '0.55rem' }}>Apply</span>
+                        {isActive && <span className="s-badge s-badge-green" style={{ fontSize: '0.55rem' }}>{t('common.active').toUpperCase()}</span>}
+                        <span className="s-badge s-badge-cyan" style={{ fontSize: '0.55rem' }}>{t('common.apply')}</span>
                       </div>
                     </div>
                     <div style={{ fontFamily: 'var(--s-font-mono)', fontSize: '0.75rem', color: 'var(--s-text-secondary)', marginBottom: 4 }}>
@@ -281,7 +283,7 @@ const DnsPage: React.FC = () => {
                       <span style={{ fontSize: '0.6875rem', color: 'var(--s-text-muted)' }}>{preset.desc}</span>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                         {preset.testing ? (
-                          <span style={{ fontSize: '0.6rem', color: 'var(--s-text-dim)' }}>Testing...</span>
+                          <span style={{ fontSize: '0.6rem', color: 'var(--s-text-dim)' }}>{t('dns.settings.testing')}</span>
                         ) : preset.latency != null ? (
                           <span style={{ fontSize: '0.7rem', fontFamily: 'var(--s-font-mono)', fontWeight: 700, color: latencyColor(preset.latency) }}>
                             {preset.latency < 0 ? 'Timeout' : `${preset.latency}ms`}
@@ -292,7 +294,7 @@ const DnsPage: React.FC = () => {
                             style={{ padding: '1px 6px', fontSize: '0.6rem' }}
                             onClick={(e) => { e.stopPropagation(); handleTestSpeed(idx); }}
                           >
-                            Test
+                            {t('dns.settings.testSpeed')}
                           </button>
                         )}
                       </div>
@@ -307,7 +309,7 @@ const DnsPage: React.FC = () => {
         {tab === 'hosts' && (
           <motion.div key="hosts" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="s-card-spacy">
             <div className="s-flex-between" style={{ marginBottom: 12 }}>
-              <div className="s-heading-md">Hosts File Editor</div>
+              <div className="s-heading-md">{t('dns.hosts.title')}</div>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 {hostsModified && <span className="s-badge s-badge-amber">Modified</span>}
                 {!isAdmin && <span style={{ fontSize: '0.6875rem', color: 'var(--s-amber)' }}>Read-only (no admin)</span>}

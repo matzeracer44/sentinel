@@ -421,19 +421,19 @@ export class ArgusManager {
   // Convenience wrappers for ARGUS endpoints
   // -----------------------------------------------------------------------
 
-  async scanUrl(url: string, force: boolean = false): Promise<unknown> {
+  async scanUrl(url: string, force: boolean = false, deepFetch: boolean = false): Promise<unknown> {
     return this.safeFetch('/api/scan', {
       method: 'POST',
-      body: JSON.stringify({ url, force }),
-      timeoutMs: 60_000,
+      body: JSON.stringify({ url, force, deep_fetch: deepFetch }),
+      timeoutMs: deepFetch ? 120_000 : 60_000,
     });
   }
 
-  async batchScan(urls: string[]): Promise<unknown> {
+  async batchScan(urls: string[], deepFetch: boolean = false): Promise<unknown> {
     return this.safeFetch('/api/batch_scan', {
       method: 'POST',
-      body: JSON.stringify({ urls }),
-      timeoutMs: 90_000,
+      body: JSON.stringify({ urls, deep_fetch: deepFetch }),
+      timeoutMs: deepFetch ? 180_000 : 90_000,
     });
   }
 
@@ -494,7 +494,7 @@ export class ArgusManager {
       for (const line of raw.split('\n')) {
         const parts = line.trim().split(/\s+/);
         const pid = parseInt(parts[parts.length - 1], 10);
-        if (pid > 0 && pid !== process.pid) pids.add(pid);
+        if (Number.isFinite(pid) && pid > 0 && pid < 999999 && pid !== process.pid) pids.add(pid);
       }
 
       for (const pid of pids) {

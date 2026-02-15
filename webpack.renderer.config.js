@@ -39,7 +39,6 @@ module.exports = {
       '@': path.resolve(__dirname, 'src'),
       '@main': path.resolve(__dirname, 'src/main'),
       '@renderer': path.resolve(__dirname, 'src/renderer'),
-      '@engines': path.resolve(__dirname, 'src/engines'),
     },
   },
   plugins: [

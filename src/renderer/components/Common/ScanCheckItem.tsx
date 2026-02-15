@@ -8,6 +8,7 @@
 
 import React, { useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useTranslation } from 'react-i18next';
 import { notify } from './SentinelNotification';
 import FixConfirmDialog, { FixImpactData } from './FixConfirmDialog';
 
@@ -56,6 +57,7 @@ const ScanCheckItem: React.FC<ScanCheckItemProps> = ({
   onFix, onViewDetails, onWhitelist, fixInProgress, compact,
   undoAvailable, onUndo, undoInProgress,
 }) => {
+  const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
 
   const sevStyle = SEVERITY_STYLES[severity] || SEVERITY_STYLES.LOW;
@@ -137,11 +139,11 @@ const ScanCheckItem: React.FC<ScanCheckItemProps> = ({
               display: 'flex', flexDirection: 'column', gap: 14,
             }}>
               {/* What Was Checked */}
-              <DetailSection title="What Was Checked" content={detail.whatChecked} />
+              <DetailSection title={t('scanDetail.whatChecked')} content={detail.whatChecked} />
 
               {/* What Was Found / Result */}
               <DetailSection
-                title={status === 'pass' ? 'Result' : 'What Was Found'}
+                title={status === 'pass' ? t('scanDetail.result') : t('scanDetail.whatFound')}
                 content={detail.whatFound}
               />
 
@@ -149,7 +151,7 @@ const ScanCheckItem: React.FC<ScanCheckItemProps> = ({
               {detail.offenders && detail.offenders.length > 0 && (
                 <div>
                   <SectionHeading>
-                    {status === 'pass' ? 'Verified Items' : `Top Offenders (${detail.offenders.length}${detail.offenders.length >= 20 ? '+' : ''})`}
+                    {status === 'pass' ? t('scanDetail.verifiedItems') : `${t('scanDetail.topOffenders')} (${detail.offenders.length}${detail.offenders.length >= 20 ? '+' : ''})`}
                   </SectionHeading>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 260, overflowY: 'auto' }}>
                     {detail.offenders.map((o, i) => {
@@ -195,14 +197,14 @@ const ScanCheckItem: React.FC<ScanCheckItemProps> = ({
 
               {/* Risk / Why This Matters */}
               <DetailSection
-                title={status === 'pass' ? 'Why This Matters' : 'Risk If Unfixed'}
+                title={status === 'pass' ? t('scanDetail.whyThisMatters') : t('scanDetail.riskIfUnfixed')}
                 content={detail.riskExplanation}
               />
 
               {/* Fix Actions */}
               {status !== 'pass' && detail.fixActions.length > 0 && (
                 <div>
-                  <SectionHeading>What [Fix] Will Do</SectionHeading>
+                  <SectionHeading>{t('scanDetail.whatFixWillDo')}</SectionHeading>
                   <ol style={{ display: 'flex', flexDirection: 'column', gap: 3, margin: 0, padding: 0, listStyle: 'none' }}>
                     {detail.fixActions.map((action, i) => (
                       <li key={i} style={{ display: 'flex', gap: 6, fontSize: '0.8125rem', color: '#cbd5e1' }}>
@@ -219,7 +221,7 @@ const ScanCheckItem: React.FC<ScanCheckItemProps> = ({
               {/* What Won't Change */}
               {status !== 'pass' && detail.preserves.length > 0 && (
                 <div>
-                  <SectionHeading>What Won't Change</SectionHeading>
+                  <SectionHeading>{t('scanDetail.whatWontChange')}</SectionHeading>
                   <ul style={{ display: 'flex', flexDirection: 'column', gap: 2, margin: 0, padding: 0, listStyle: 'none' }}>
                     {detail.preserves.map((p, i) => (
                       <li key={i} style={{ fontSize: '0.8125rem', color: 'var(--s-text-dim)' }}>• {p}</li>
@@ -243,7 +245,7 @@ const ScanCheckItem: React.FC<ScanCheckItemProps> = ({
                       transition: 'background 0.15s',
                     }}
                   >
-                    {fixInProgress ? '⟳ Analysiere...' : '🛡 Apply Fix'}
+                    {fixInProgress ? `⟳ ${t('scanDetail.analyzing')}` : `🛡 ${t('scanDetail.applyFix')}`}
                   </button>
                 )}
                 {/* Undo button — available for 24h after fix was applied */}
@@ -259,7 +261,7 @@ const ScanCheckItem: React.FC<ScanCheckItemProps> = ({
                       transition: 'all 0.15s',
                     }}
                   >
-                    {undoInProgress ? '⟳ Undo...' : '↩ Undo Fix'}
+                    {undoInProgress ? '⟳ Undo...' : `↩ ${t('scanDetail.undoFix')}`}
                   </button>
                 )}
                 {onViewDetails && (
@@ -271,7 +273,7 @@ const ScanCheckItem: React.FC<ScanCheckItemProps> = ({
                       color: '#cbd5e1', fontSize: '0.8125rem', cursor: 'pointer',
                     }}
                   >
-                    View Details
+                    {t('scanDetail.viewDetails')}
                   </button>
                 )}
                 {onWhitelist && (
@@ -283,17 +285,17 @@ const ScanCheckItem: React.FC<ScanCheckItemProps> = ({
                       color: '#cbd5e1', fontSize: '0.8125rem', cursor: 'pointer',
                     }}
                   >
-                    Whitelist
+                    {t('scanDetail.whitelist')}
                   </button>
                 )}
                 {undoAvailable && (
                   <span style={{ fontSize: '0.6875rem', color: 'var(--s-text-dim)', marginLeft: 'auto' }}>
-                    ⏱ Undo verfügbar für 24h
+                    ⏱ {t('scanDetail.undoAvailable')}
                   </span>
                 )}
                 {detail.canUndo && detail.undoPath && !undoAvailable && (
                   <span style={{ fontSize: '0.6875rem', color: 'var(--s-text-dim)', marginLeft: 'auto' }}>
-                    ⟲ Undo via {detail.undoPath}
+                    ⟲ {t('scanDetail.undoVia')} {detail.undoPath}
                   </span>
                 )}
               </div>

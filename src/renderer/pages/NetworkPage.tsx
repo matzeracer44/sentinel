@@ -8,6 +8,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { notify } from '../components/Common/SentinelNotification';
+import { useTranslation } from 'react-i18next';
 import { LegacyScanCheckItem as ScanCheckItem } from '../components/Common/ScanCheckItem';
 import { getProcessKillRisk } from '../../shared/constants';
 
@@ -64,6 +65,7 @@ const STATE_CONFIG: Record<string, { color: string; dot: string; label: string }
 const getStateConfig = (s: string) => STATE_CONFIG[s] || { color: 'var(--s-text-muted)', dot: 's-status-dot-offline', label: s };
 
 const NetworkPage: React.FC = () => {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const [tab, setTab] = useState<Tab>('connections');
   const [connections, setConnections] = useState<Connection[]>([]);
@@ -75,6 +77,7 @@ const NetworkPage: React.FC = () => {
   const [metaIp, setMetaIp] = useState('');
   const [metaResult, setMetaResult] = useState<IPMeta | null>(null);
   const [searchFilter, setSearchFilter] = useState('');
+  const [processSearch, setProcessSearch] = useState('');
   const [lookupModal, setLookupModal] = useState<IPMeta | null>(null);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [netScanning, setNetScanning] = useState(false);
@@ -205,13 +208,13 @@ const NetworkPage: React.FC = () => {
     return { established, listening, uniqueIps, total: connections.length };
   }, [connections]);
 
-  const TABS: { key: Tab; label: string; count?: number; badge?: string }[] = [
-    { key: 'connections', label: 'Live Connections', count: stats.total },
-    { key: 'processes', label: 'Processes', count: processes.length },
-    { key: 'tls', label: 'TLS Inspector' },
-    { key: 'metadata', label: 'IP Lookup' },
-    { key: 'netscan', label: 'Network Scan', badge: netScanResult ? `${netScanResult.score}%` : undefined },
-    { key: 'edrscan', label: 'EDR Scan', badge: edrScanResult ? `${edrScanResult.score}%` : undefined },
+  const TABS: { key: Tab; labelKey: string; count?: number; badge?: string }[] = [
+    { key: 'connections', labelKey: 'network.tabs.traffic', count: stats.total },
+    { key: 'processes', labelKey: 'network.tabs.processes', count: processes.length },
+    { key: 'tls', labelKey: 'network.tabs.tls' },
+    { key: 'metadata', labelKey: 'network.ipMetadata.title' },
+    { key: 'netscan', labelKey: 'network.tabs.networkScan', badge: netScanResult ? `${netScanResult.score}%` : undefined },
+    { key: 'edrscan', labelKey: 'network.tabs.edr', badge: edrScanResult ? `${edrScanResult.score}%` : undefined },
   ];
 
   return (
@@ -219,16 +222,16 @@ const NetworkPage: React.FC = () => {
       {/* ─── Spacy Header ─── */}
       <div className="s-page-header">
         <div className="s-tab-bar">
-          {TABS.map((t) => (
-            <button key={t.key} className={`s-tab ${tab === t.key ? 's-tab-active' : ''}`} onClick={() => setTab(t.key)}>
-              {t.label}
-              {t.count !== undefined && <span className="s-tab-badge">{t.count}</span>}
-              {t.badge && <span className="s-tab-badge">{t.badge}</span>}
+          {TABS.map((tb) => (
+            <button key={tb.key} className={`s-tab ${tab === tb.key ? 's-tab-active' : ''}`} onClick={() => setTab(tb.key)}>
+              {t(tb.labelKey)}
+              {tb.count !== undefined && <span className="s-tab-badge">{tb.count}</span>}
+              {tb.badge && <span className="s-tab-badge">{tb.badge}</span>}
             </button>
           ))}
         </div>
         <button className="s-btn s-btn-primary s-btn-sm" style={{ borderRadius: 8, fontSize: '0.65rem' }} onClick={fetchData} disabled={loading}>
-          {loading ? '...' : '↻ Refresh'}
+          {loading ? '...' : `↻ ${t('common.refresh')}`}
         </button>
       </div>
 
@@ -243,10 +246,10 @@ const NetworkPage: React.FC = () => {
       {tab === 'connections' && (
         <div style={{ display: 'flex', gap: 10 }}>
           {[
-            { label: 'Connected', value: stats.established, color: 'var(--s-green)' },
-            { label: 'Listening', value: stats.listening, color: 'var(--s-cyan)' },
-            { label: 'Unique IPs', value: stats.uniqueIps, color: 'var(--s-amber)' },
-            { label: 'Total', value: stats.total, color: 'var(--s-text-secondary)' },
+            { label: t('network.traffic.established'), value: stats.established, color: 'var(--s-green)' },
+            { label: t('network.traffic.listening'), value: stats.listening, color: 'var(--s-cyan)' },
+            { label: 'IPs', value: stats.uniqueIps, color: 'var(--s-amber)' },
+            { label: t('common.total'), value: stats.total, color: 'var(--s-text-secondary)' },
           ].map((s) => (
             <div key={s.label} style={{
               display: 'flex', alignItems: 'center', gap: 8,
@@ -278,18 +281,18 @@ const NetworkPage: React.FC = () => {
               <table className="s-table">
                 <thead>
                   <tr>
-                    <th>Remote IP</th>
-                    <th>Port</th>
-                    <th>Local Port</th>
-                    <th>State</th>
-                    <th>PID</th>
-                    <th>Process</th>
-                    <th style={{ width: 100 }}>Actions</th>
+                    <th>{t('network.traffic.remoteAddress')}</th>
+                    <th>{t('network.traffic.remotePort')}</th>
+                    <th>{t('network.traffic.localPort')}</th>
+                    <th>{t('network.traffic.state')}</th>
+                    <th>{t('network.traffic.pid')}</th>
+                    <th>{t('network.traffic.process')}</th>
+                    <th style={{ width: 100 }}>{t('common.actions')}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredConns.length === 0 ? (
-                    <tr><td colSpan={7} style={{ textAlign: 'center', padding: 32, color: 'var(--s-text-dim)' }}>{loading ? 'Loading...' : 'No connections'}</td></tr>
+                    <tr><td colSpan={7} style={{ textAlign: 'center', padding: 32, color: 'var(--s-text-dim)' }}>{loading ? t('common.loading') : t('network.traffic.noConnections')}</td></tr>
                   ) : filteredConns.slice(0, 200).map((c, i) => {
                     const sc = getStateConfig(c.state);
                     const local = isLocal(c.remoteIP);
@@ -327,7 +330,7 @@ const NetworkPage: React.FC = () => {
             </div>
             {filteredConns.length > 200 && (
               <div style={{ padding: '8px 18px', textAlign: 'center', fontSize: '0.75rem', color: 'var(--s-text-dim)', borderTop: '1px solid var(--s-border)' }}>
-                Showing 200 of {filteredConns.length}. Use filter to narrow down.
+                {t('common.total')}: {filteredConns.length}
               </div>
             )}
           </motion.div>
@@ -336,13 +339,19 @@ const NetworkPage: React.FC = () => {
         {/* ═══ Processes Tab ═══ */}
         {tab === 'processes' && (
           <motion.div key="proc" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="s-card-spacy" style={{ padding: 0, overflow: 'hidden' }}>
+            <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--s-border)', display: 'flex', alignItems: 'center', gap: 12 }}>
+              <input className="s-input" placeholder={t('network.processes.searchPlaceholder', 'Prozess suchen (Name oder PID)...')} value={processSearch} onChange={(e) => setProcessSearch(e.target.value)} style={{ maxWidth: 400, flex: 1 }} />
+              <span style={{ fontSize: '0.7rem', color: 'var(--s-text-dim)', whiteSpace: 'nowrap' }}>
+                {processes.filter((p) => !processSearch || p.name.toLowerCase().includes(processSearch.toLowerCase()) || String(p.pid).includes(processSearch)).length} / {processes.length}
+              </span>
+            </div>
             <div style={{ maxHeight: 520, overflowY: 'auto' }}>
               <table className="s-table">
-                <thead><tr><th>PID</th><th>Process Name</th><th>CPU %</th><th>RAM MB</th><th style={{ width: 100 }}>Actions</th></tr></thead>
+                <thead><tr><th>{t('network.processes.pid')}</th><th>{t('network.processes.name')}</th><th>{t('network.processes.cpu')}</th><th>{t('network.processes.memory')}</th><th style={{ width: 100 }}>{t('common.actions')}</th></tr></thead>
                 <tbody>
                   {processes.length === 0 ? (
-                    <tr><td colSpan={5} style={{ textAlign: 'center', padding: 32, color: 'var(--s-text-dim)' }}>No processes</td></tr>
-                  ) : processes.slice(0, 100).map((p) => {
+                    <tr><td colSpan={5} style={{ textAlign: 'center', padding: 32, color: 'var(--s-text-dim)' }}>{t('network.processes.noProcesses')}</td></tr>
+                  ) : processes.filter((p) => !processSearch || p.name.toLowerCase().includes(processSearch.toLowerCase()) || String(p.pid).includes(processSearch)).map((p) => {
                     const risk = getProcessKillRisk(p.name, p.pid);
                     const isExpanded = expandedPid === p.pid;
                     return (
@@ -409,7 +418,7 @@ const NetworkPage: React.FC = () => {
         {/* ═══ TLS Inspector Tab ═══ */}
         {tab === 'tls' && (
           <motion.div key="tls" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="s-card-spacy">
-            <div className="s-heading-md" style={{ marginBottom: 16 }}>TLS Certificate Inspector</div>
+            <div className="s-heading-md" style={{ marginBottom: 16 }}>{t('network.tls.title')}</div>
             <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
               <input className="s-input" placeholder="Hostname (e.g. google.com)" value={tlsHost} onChange={(e) => setTlsHost(e.target.value)} style={{ maxWidth: 400 }} onKeyDown={(e) => e.key === 'Enter' && handleTlsInspect()} />
               <button className="s-btn s-btn-primary" onClick={handleTlsInspect} disabled={!tlsHost.trim()}>Inspect</button>
@@ -427,7 +436,7 @@ const NetworkPage: React.FC = () => {
         {/* ═══ IP Lookup Tab ═══ */}
         {tab === 'metadata' && (
           <motion.div key="meta" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="s-card-spacy">
-            <div className="s-heading-md" style={{ marginBottom: 16 }}>IP Metadata Lookup</div>
+            <div className="s-heading-md" style={{ marginBottom: 16 }}>{t('network.ipMetadata.title')}</div>
             <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
               <input className="s-input" placeholder="IP address (e.g. 8.8.8.8)" value={metaIp} onChange={(e) => setMetaIp(e.target.value)} style={{ maxWidth: 400 }} onKeyDown={(e) => e.key === 'Enter' && handleMetaLookup()} />
               <button className="s-btn s-btn-primary" onClick={handleMetaLookup} disabled={!metaIp.trim()}>Lookup</button>

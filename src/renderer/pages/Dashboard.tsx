@@ -3,11 +3,12 @@
  * System health overview, threat summary, live stats, quick actions, and activity feed.
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { notify } from '../components/Common/SentinelNotification';
 import { LegacyScanCheckItem } from '../components/Common/ScanCheckItem';
+import { useTranslation } from 'react-i18next';
 
 interface SystemStats {
   cpu: number;
@@ -34,20 +35,20 @@ interface ActivityEntry {
 const api = (): any => (window as any).electronAPI;
 
 const CLUSTER_CARDS = [
-  { key: 'firewall', label: 'Firewall', icon: '🛡', color: 'var(--s-cluster-firewall)', path: '/firewall', desc: 'Rules & blocking' },
-  { key: 'intel', label: 'Threat Intel', icon: '🔍', color: 'var(--s-cluster-intel)', path: '/intel', desc: 'ARGUS scanning' },
-  { key: 'network', label: 'Network', icon: '🌐', color: 'var(--s-cluster-network)', path: '/network', desc: 'Live monitoring' },
-  { key: 'dns', label: 'DNS & Privacy', icon: '🔒', color: 'var(--s-cluster-dns)', path: '/dns', desc: 'DNS & hosts' },
-  { key: 'system', label: 'System', icon: '⚙', color: 'var(--s-cluster-system)', path: '/system', desc: 'Performance' },
-  { key: 'vault', label: 'Vault', icon: '🗝', color: 'var(--s-cluster-vault)', path: '/vault', desc: 'Encryption' },
-  { key: 'automation', label: 'Automation', icon: '⚡', color: 'var(--s-cluster-automation)', path: '/automation', desc: 'Quick actions' },
+  { key: 'firewall', labelKey: 'dashboard.clusterFirewall', icon: '🛡', color: 'var(--s-cluster-firewall)', path: '/firewall', descKey: 'dashboard.clusterFirewallDesc' },
+  { key: 'intel', labelKey: 'dashboard.clusterIntel', icon: '🔍', color: 'var(--s-cluster-intel)', path: '/intel', descKey: 'dashboard.clusterIntelDesc' },
+  { key: 'network', labelKey: 'dashboard.clusterNetwork', icon: '🌐', color: 'var(--s-cluster-network)', path: '/network', descKey: 'dashboard.clusterNetworkDesc' },
+  { key: 'dns', labelKey: 'dashboard.clusterDns', icon: '🔒', color: 'var(--s-cluster-dns)', path: '/dns', descKey: 'dashboard.clusterDnsDesc' },
+  { key: 'system', labelKey: 'dashboard.clusterSystem', icon: '⚙', color: 'var(--s-cluster-system)', path: '/system', descKey: 'dashboard.clusterSystemDesc' },
+  { key: 'vault', labelKey: 'dashboard.clusterVault', icon: '🗝', color: 'var(--s-cluster-vault)', path: '/vault', descKey: 'dashboard.clusterVaultDesc' },
+  { key: 'automation', labelKey: 'dashboard.clusterAutomation', icon: '⚡', color: 'var(--s-cluster-automation)', path: '/automation', descKey: 'dashboard.clusterAutomationDesc' },
 ];
 
 const QUICK_ACTIONS = [
-  { id: 'deep-scan', label: 'Deep Scan', icon: '🔬', desc: '101 security checks across 5 modules' },
-  { id: 'gaming', label: 'Gaming Mode', icon: '🎮', desc: 'Optimize for gaming performance' },
-  { id: 'privacy', label: 'Privacy Mode', icon: '👁', desc: 'Maximum privacy settings' },
-  { id: 'cleanup', label: 'Cleanup', icon: '🧹', desc: 'Clear caches & temp files' },
+  { id: 'deep-scan', labelKey: 'dashboard.deepScan', icon: '🔬', descKey: 'dashboard.deepScanDesc' },
+  { id: 'gaming', labelKey: 'dashboard.gamingMode', icon: '🎮', descKey: 'dashboard.gamingModeDesc' },
+  { id: 'privacy', labelKey: 'dashboard.privacyMode', icon: '👁', descKey: 'dashboard.privacyModeDesc' },
+  { id: 'cleanup', labelKey: 'dashboard.cleanup', icon: '🧹', descKey: 'dashboard.cleanupDesc' },
 ];
 
 const severityColor = (s: string) => {
@@ -85,6 +86,7 @@ const MODULE_META: Record<string, { label: string; icon: string; color: string; 
 };
 
 const Dashboard: React.FC = () => {
+  const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const [stats, setStats] = useState<SystemStats>({ cpu: 0, ram: 0, disk: 0 });
   const [health, setHealth] = useState<HealthReport | null>(null);
@@ -92,6 +94,7 @@ const Dashboard: React.FC = () => {
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
   const [healthScore, setHealthScore] = useState(0);
   const [scanning, setScanning] = useState(false);
+  const [scanPhase, setScanPhase] = useState<string | null>(null);
   const [scanResult, setScanResult] = useState<FullScanResult | null>(null);
   const [scanError, setScanError] = useState<string | null>(null);
   const [expandedModule, setExpandedModule] = useState<string | null>(null);
@@ -142,7 +145,10 @@ const Dashboard: React.FC = () => {
       }
       fetchData();
     });
-    return () => { unsubThreat?.(); unsubScan?.(); };
+    const unsubProgress = a?.notifications?.onScanProgress?.((data: { phase: string; elapsed: number }) => {
+      setScanPhase(data.phase === 'done' ? null : data.phase);
+    });
+    return () => { unsubThreat?.(); unsubScan?.(); unsubProgress?.(); };
   }, [fetchData]);
 
   // VPN + ARGUS status polling (every 15s)
@@ -179,9 +185,10 @@ const Dashboard: React.FC = () => {
     setScanResult(null);
     setScanError(null);
     try {
+      try { await api()?.shield?.setScanLanguage?.(i18n.language); } catch { /* best-effort */ }
       const scanPromise = api()?.shield?.fullScan?.();
       if (!scanPromise) { setScanError('Shield API not available'); setScanning(false); return; }
-      const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('Scan timed out after 120s')), 120_000));
+      const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('Scan timed out after 300s')), 300_000));
       const r = await Promise.race([scanPromise, timeout]) as any;
       if (r?.success) {
         setScanResult(r as FullScanResult);
@@ -199,6 +206,24 @@ const Dashboard: React.FC = () => {
       setScanning(false);
     }
   }, []);
+
+  // Auto-run hardening audit on mount for Systemzustand
+  useEffect(() => { handleHardeningAudit(); }, [handleHardeningAudit]);
+
+  // Combined Systemzustand score: hardening + full scan + system stats
+  const combinedSystemScore = useMemo(() => {
+    if (!hardeningScore) return null;
+    const hardeningPct = hardeningScore.percentage;
+    if (scanResult) {
+      // Full scan available: 40% hardening + 50% scan + 10% system health
+      const sysHealthPct = health?.score ?? 50;
+      return Math.round(hardeningPct * 0.4 + scanResult.score * 0.5 + sysHealthPct * 0.1);
+    }
+    // No scan yet: show hardening only but mark as incomplete
+    return hardeningPct;
+  }, [hardeningScore, scanResult, health]);
+
+  const systemzustandComplete = !!scanResult;
 
   const scoreColor = healthScore >= 80 ? 'var(--s-green)' : healthScore >= 50 ? 'var(--s-amber)' : 'var(--s-red)';
   const scanScoreColor = (s: number) => s >= 80 ? 'var(--s-green)' : s >= 50 ? 'var(--s-amber)' : 'var(--s-red)';
@@ -273,7 +298,7 @@ const Dashboard: React.FC = () => {
               fontSize: '0.625rem', color: 'var(--s-text-dim)', marginTop: 6,
               textTransform: 'uppercase', letterSpacing: '0.12em', fontWeight: 600,
             }}>
-              Health Score
+              {t('dashboard.healthScore')}
             </div>
           </div>
           <div style={{
@@ -281,7 +306,7 @@ const Dashboard: React.FC = () => {
             padding: '6px 16px', borderRadius: 20,
             background: `${scoreColor}08`, border: `1px solid ${scoreColor}18`,
           }}>
-            {healthScore >= 80 ? '● System Protected' : healthScore >= 50 ? '◐ Needs Attention' : '○ Critical Issues'}
+            {healthScore >= 80 ? `● ${t('nav.systemProtected')}` : healthScore >= 50 ? `◐ ${t('common.warning')}` : `○ ${t('common.critical')}`}
           </div>
           {/* Sub-scores from last deep scan */}
           {scanResult && (() => {
@@ -372,7 +397,7 @@ const Dashboard: React.FC = () => {
       {/* ─── Cluster Navigation Cards ─── */}
       <div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-          <span className="s-heading-sm">Security Clusters</span>
+          <span className="s-heading-sm">{t('nav.security')}</span>
           <div style={{ flex: 1, height: 1, background: 'linear-gradient(90deg, rgba(109,120,255,0.2), transparent)' }} />
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))', gap: 12 }}>
@@ -405,8 +430,8 @@ const Dashboard: React.FC = () => {
                   {cluster.icon}
                 </div>
                 <div style={{ flex: 1 }}>
-                  <span style={{ fontWeight: 600, fontSize: '0.8125rem', display: 'block' }}>{cluster.label}</span>
-                  <span style={{ fontSize: '0.625rem', color: 'var(--s-text-dim)' }}>{cluster.desc}</span>
+                  <span style={{ fontWeight: 600, fontSize: '0.8125rem', display: 'block' }}>{t(cluster.labelKey)}</span>
+                  <span style={{ fontSize: '0.625rem', color: 'var(--s-text-dim)' }}>{t(cluster.descKey)}</span>
                 </div>
                 <motion.span
                   style={{ color: 'var(--s-text-dim)', fontSize: '0.75rem' }}
@@ -459,12 +484,12 @@ const Dashboard: React.FC = () => {
           </div>
           <div style={{ flex: 1 }}>
             <div style={{ fontWeight: 600, fontSize: '0.8125rem' }}>
-              VPN {vpnStatus?.active ? 'Active' : 'Inactive'}
+              VPN {vpnStatus?.active ? t('dashboard.vpnActive') : t('dashboard.vpnInactive')}
             </div>
             <div style={{ fontSize: '0.6875rem', color: 'var(--s-text-muted)', marginTop: 2 }}>
               {vpnStatus?.active
                 ? `${vpnStatus.provider || 'Unknown'} • ${vpnStatus.protocol || ''} • ${vpnStatus.tunnelIP || ''}`
-                : 'No VPN tunnel detected'}
+                : t('common.inactive')}
             </div>
           </div>
           <div style={{
@@ -495,18 +520,24 @@ const Dashboard: React.FC = () => {
                 <div style={{
                   width: 40, height: 40, borderRadius: 10,
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  background: hardeningScore.percentage >= 80 ? 'rgba(0,255,136,0.12)' : hardeningScore.percentage >= 50 ? 'rgba(255,170,0,0.12)' : 'rgba(255,51,102,0.12)',
-                  border: `1px solid ${hardeningScore.percentage >= 80 ? 'rgba(0,255,136,0.3)' : hardeningScore.percentage >= 50 ? 'rgba(255,170,0,0.3)' : 'rgba(255,51,102,0.3)'}`,
+                  background: (combinedSystemScore ?? 0) >= 80 ? 'rgba(0,255,136,0.12)' : (combinedSystemScore ?? 0) >= 50 ? 'rgba(255,170,0,0.12)' : 'rgba(255,51,102,0.12)',
+                  border: `1px solid ${(combinedSystemScore ?? 0) >= 80 ? 'rgba(0,255,136,0.3)' : (combinedSystemScore ?? 0) >= 50 ? 'rgba(255,170,0,0.3)' : 'rgba(255,51,102,0.3)'}`,
                   fontSize: '0.875rem', fontWeight: 700,
-                  color: hardeningScore.percentage >= 80 ? 'var(--s-green)' : hardeningScore.percentage >= 50 ? 'var(--s-amber)' : 'var(--s-red)',
+                  color: (combinedSystemScore ?? 0) >= 80 ? 'var(--s-green)' : (combinedSystemScore ?? 0) >= 50 ? 'var(--s-amber)' : 'var(--s-red)',
                 }}>
-                  {hardeningScore.percentage}
+                  {combinedSystemScore ?? '—'}
                 </div>
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 600, fontSize: '0.8125rem' }}>Hardening Score</div>
+                  <div style={{ fontWeight: 600, fontSize: '0.8125rem' }}>{t('dashboard.systemHealth')}</div>
                   <div style={{ fontSize: '0.6875rem', color: 'var(--s-text-muted)', marginTop: 2 }}>
-                    {hardeningScore.checks.filter(c => c.status === 'pass').length}/{hardeningScore.checks.length} checks passed
+                    {hardeningScore.checks.filter(c => c.status === 'pass').length}/{hardeningScore.checks.length} {t('common.pass')}
+                    {scanResult && <span style={{ marginLeft: 6, color: 'var(--s-cyan)', fontSize: '0.6rem' }}>+ Scan {scanResult.score}%</span>}
                   </div>
+                  {!systemzustandComplete && (
+                    <div style={{ fontSize: '0.5625rem', color: 'var(--s-amber)', marginTop: 2, opacity: 0.8 }}>
+                      Vollst. Scan f. genauen Wert erforderlich
+                    </div>
+                  )}
                 </div>
                 <span style={{
                   color: 'var(--s-text-dim)', fontSize: '0.75rem',
@@ -530,13 +561,13 @@ const Dashboard: React.FC = () => {
                   🛡
                 </div>
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 600, fontSize: '0.8125rem' }}>System Hardening</div>
+                  <div style={{ fontWeight: 600, fontSize: '0.8125rem' }}>{t('dashboard.securityStatus')}</div>
                   <div style={{ fontSize: '0.6875rem', color: 'var(--s-text-muted)', marginTop: 2 }}>
-                    Run audit to check 11 security controls
+                    {t('system.scans.hardeningScan')}
                   </div>
                 </div>
                 <button className="s-btn s-btn-ghost s-btn-sm" onClick={(e) => { e.stopPropagation(); handleHardeningAudit(); }} disabled={hardeningLoading}>
-                  {hardeningLoading ? 'Auditing...' : 'Run Audit'}
+                  {hardeningLoading ? t('dashboard.scanning') : t('system.scans.runScan')}
                 </button>
               </>
             )}
@@ -605,12 +636,12 @@ const Dashboard: React.FC = () => {
           </div>
           <div style={{ flex: 1 }}>
             <div style={{ fontWeight: 600, fontSize: '0.8125rem' }}>
-              ARGUS {argusStatus?.online ? 'Online' : argusStatus?.status === 'starting' ? 'Starting...' : 'Offline'}
+              ARGUS {argusStatus?.online ? t('intel.argus.online') : argusStatus?.status === 'starting' ? t('intel.argus.starting') : t('intel.argus.offline')}
             </div>
             <div style={{ fontSize: '0.6875rem', color: 'var(--s-text-muted)', marginTop: 2 }}>
               {argusStatus?.online
                 ? `PID ${argusStatus.pid} • Uptime ${Math.floor((argusStatus.uptimeMs || 0) / 60000)}m`
-                : argusStatus?.lastError || 'Backend not running'}
+                : argusStatus?.lastError || t('intel.argus.offline')}
             </div>
           </div>
           {!argusStatus?.online && (
@@ -619,7 +650,7 @@ const Dashboard: React.FC = () => {
               onClick={async () => { try { await api()?.argus?.start?.(); notify.success('ARGUS start requested'); } catch (e: any) { notify.error(e?.message || 'Failed to start ARGUS'); } }}
               style={{ color: 'var(--s-red)', borderRadius: 8 }}
             >
-              Start
+              {t('common.start')}
             </button>
           )}
           <div style={{
@@ -635,14 +666,14 @@ const Dashboard: React.FC = () => {
       {(scanning || scanResult) && (
         <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-            <span className="s-heading-sm">Sentinel Deep Scan</span>
+            <span className="s-heading-sm">{t('dashboard.deepScan')}</span>
             {scanning && (
               <motion.span
                 animate={{ opacity: [0.4, 1, 0.4] }}
                 transition={{ duration: 1.5, repeat: Infinity }}
                 style={{ fontSize: '0.7rem', color: 'var(--s-cyan)', fontWeight: 500 }}
               >
-                Scanning 101 checks...
+                {t('dashboard.scanning')}
               </motion.span>
             )}
             <div style={{ flex: 1, height: 1, background: 'linear-gradient(90deg, rgba(109,120,255,0.2), transparent)' }} />
@@ -668,15 +699,15 @@ const Dashboard: React.FC = () => {
                 <div style={{ display: 'flex', gap: 12, fontSize: '0.725rem', flexWrap: 'wrap' }}>
                   <span style={{ color: 'var(--s-green)', display: 'flex', alignItems: 'center', gap: 3 }}>
                     <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--s-green)', boxShadow: '0 0 4px var(--s-green)' }} />
-                    {scanResult.passed} passed
+                    {scanResult.passed} {t('common.pass')}
                   </span>
                   <span style={{ color: 'var(--s-red)', display: 'flex', alignItems: 'center', gap: 3 }}>
                     <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--s-red)', boxShadow: '0 0 4px var(--s-red)' }} />
-                    {scanResult.failed} failed
+                    {scanResult.failed} {t('common.fail')}
                   </span>
                   <span style={{ color: 'var(--s-amber)', display: 'flex', alignItems: 'center', gap: 3 }}>
                     <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--s-amber)', boxShadow: '0 0 4px var(--s-amber)' }} />
-                    {scanResult.warnings} warnings
+                    {scanResult.warnings} {t('common.warn')}
                   </span>
                 </div>
                 <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
@@ -691,14 +722,14 @@ const Dashboard: React.FC = () => {
                       } catch (e: any) { notify.error(e?.message || 'Export failed'); }
                     }}
                   >
-                    Export Report
+                    {t('dashboard.exportReport')}
                   </button>
                   <button
                     className="s-btn s-btn-ghost s-btn-sm"
                     style={{ borderColor: 'rgba(60,240,255,0.2)' }}
                     onClick={handleFullScan} disabled={scanning}
                   >
-                    {scanning ? 'Scanning...' : '↻ Re-scan'}
+                    {scanning ? t('dashboard.scanning') : `↻ ${t('common.refresh')}`}
                   </button>
                 </div>
               </div>
@@ -731,7 +762,7 @@ const Dashboard: React.FC = () => {
                         </span>
                       </div>
                       <div style={{ fontSize: '0.6rem', color: 'var(--s-text-dim)', padding: '4px 12px', borderLeft: '1px solid rgba(255,255,255,0.06)', borderRight: '1px solid rgba(255,255,255,0.06)' }}>
-                        {mod.passed}/{mod.total} passed
+                        {mod.passed}/{mod.total} {t('common.pass')}
                       </div>
                       <div className="s-progress-bar" style={{ height: 3, margin: '0 12px 4px', borderRadius: 2 }}>
                         <div className="s-progress-fill" style={{ width: `${mod.score}%`, background: `linear-gradient(90deg, ${meta.color}, ${meta.color}66)`, boxShadow: `0 0 6px ${meta.color}44` }} />
@@ -745,7 +776,7 @@ const Dashboard: React.FC = () => {
                         {mod.checks && mod.checks.map((check: any, ci: number) => (
                           <LegacyScanCheckItem
                             key={ci}
-                            check={{ name: check.name, status: check.status, detail: check.detail, risk: check.risk, richDetail: check.richDetail }}
+                            check={{ id: check.id, name: check.name, status: check.status, detail: check.detail, risk: check.risk, richDetail: check.richDetail }}
                             onNavigate={(p) => navigate(p)}
                             compact
                           />
@@ -809,10 +840,16 @@ const Dashboard: React.FC = () => {
                 />
               </div>
               <div style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--s-text-secondary)' }}>
-                Running Deep System Analysis
+                {t('dashboard.deepScan')}
               </div>
+              {scanPhase && MODULE_META[scanPhase] && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 16px', borderRadius: 8, background: 'rgba(60,240,255,0.06)', border: '1px solid rgba(60,240,255,0.12)' }}>
+                  <span style={{ fontSize: '1rem' }}>{MODULE_META[scanPhase].icon}</span>
+                  <span style={{ fontSize: '0.8rem', fontWeight: 600, color: MODULE_META[scanPhase].color }}>{MODULE_META[scanPhase].label}</span>
+                </div>
+              )}
               <div style={{ fontSize: '0.75rem', color: 'var(--s-text-dim)', maxWidth: 400 }}>
-                Scanning 101 checks across Kernel, EDR, Network, Performance & Privacy modules...
+                {scanPhase ? `Scanning ${MODULE_META[scanPhase]?.label || scanPhase}...` : t('dashboard.deepScanDesc')}
               </div>
             </div>
           )}
@@ -828,10 +865,10 @@ const Dashboard: React.FC = () => {
                   background: 'rgba(255,95,95,0.1)', fontSize: '1.1rem',
                 }}>⚠</div>
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 600, color: 'var(--s-red)', fontSize: '0.8125rem' }}>Scan Failed</div>
+                  <div style={{ fontWeight: 600, color: 'var(--s-red)', fontSize: '0.8125rem' }}>{t('scan.fixFailed')}</div>
                   <div style={{ fontSize: '0.725rem', color: 'var(--s-text-muted)', marginTop: 2 }}>{scanError}</div>
                 </div>
-                <button className="s-btn s-btn-ghost s-btn-sm" onClick={handleFullScan}>Retry</button>
+                <button className="s-btn s-btn-ghost s-btn-sm" onClick={handleFullScan}>{t('common.retry')}</button>
               </div>
             </div>
           )}
@@ -848,7 +885,7 @@ const Dashboard: React.FC = () => {
           transition={{ delay: 0.35 }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
-            <span className="s-heading-sm">Quick Actions</span>
+            <span className="s-heading-sm">{t('dashboard.quickActions')}</span>
             <div style={{ flex: 1, height: 1, background: 'linear-gradient(90deg, rgba(109,120,255,0.15), transparent)' }} />
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
@@ -873,9 +910,9 @@ const Dashboard: React.FC = () => {
                       if (action.id === 'deep-scan') { handleFullScan(); return; }
                       const r = await api()?.executeQuickAction?.(action.id);
                       if (r?.success) {
-                        notify.success(`${action.label}: ${r.actions?.join(', ') || r.message || 'Done'}`);
+                        notify.success(`${t(action.labelKey)}: ${r.actions?.join(', ') || r.message || t('common.success')}`);
                       } else {
-                        notify.error(r?.message || `${action.label} failed`);
+                        notify.error(r?.message || `${t(action.labelKey)} ${t('common.fail')}`);
                       }
                     } catch (e: any) { notify.error(e?.message || 'Action failed'); }
                   }}
@@ -889,8 +926,8 @@ const Dashboard: React.FC = () => {
                   }}>
                     {action.icon}
                   </div>
-                  <span style={{ fontSize: '0.75rem', fontWeight: 600 }}>{action.label}</span>
-                  <span style={{ fontSize: '0.6rem', color: 'var(--s-text-dim)', lineHeight: 1.3 }}>{action.desc}</span>
+                  <span style={{ fontSize: '0.75rem', fontWeight: 600 }}>{t(action.labelKey)}</span>
+                  <span style={{ fontSize: '0.6rem', color: 'var(--s-text-dim)', lineHeight: 1.3 }}>{t(action.descKey)}</span>
                 </motion.button>
               );
             })}
@@ -907,10 +944,10 @@ const Dashboard: React.FC = () => {
         >
           <div className="s-flex-between" style={{ marginBottom: 12 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <span className="s-heading-sm">Recent Activity</span>
+              <span className="s-heading-sm">{t('dashboard.recentActivity')}</span>
               <div style={{ flex: 1, height: 1, background: 'linear-gradient(90deg, rgba(109,120,255,0.15), transparent)' }} />
             </div>
-            <button className="s-btn s-btn-ghost s-btn-sm" onClick={() => navigate('/settings')}>View All →</button>
+            <button className="s-btn s-btn-ghost s-btn-sm" onClick={() => navigate('/settings')}>{t('common.all')} →</button>
           </div>
           <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 0, position: 'relative' }}>
             {/* Timeline line */}
@@ -927,7 +964,7 @@ const Dashboard: React.FC = () => {
                 display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
               }}>
                 <span style={{ fontSize: '1.5rem', opacity: 0.3 }}>◇</span>
-                No recent activity
+                {t('common.noData')}
               </div>
             ) : (
               activity.map((entry, ei) => (

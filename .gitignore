@@ -15,7 +15,6 @@ private/
 
 # ═══ DEPENDENCIES ═══
 node_modules/
-package-lock.json
 yarn.lock
 
 # ═══ BUILD ═══
@@ -28,6 +27,8 @@ out/
 # ═══ IDE ═══
 .vscode/
 .idea/
+.windsurf/
+.windsurfrules
 *.swp
 *.swo
 *~

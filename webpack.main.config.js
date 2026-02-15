@@ -21,7 +21,6 @@ module.exports = {
       '@': resolveFromProject(['src']),
       '@main': resolveFromProject(['src/main']),
       '@renderer': resolveFromProject(['src/renderer']),
-      '@engines': resolveFromProject(['src/engines']),
     },
   },
   node: {
@@ -32,7 +31,6 @@ module.exports = {
     electron: 'commonjs electron',
     'better-sqlite3': 'commonjs better-sqlite3',
     'classic-level': 'commonjs classic-level',
-    leveldown: 'commonjs leveldown',
   },
   module: {
     rules: [
@@ -56,16 +54,8 @@ module.exports = {
     new CopyWebpackPlugin({
       patterns: [
         {
-          from: resolveFromProject(['node_modules/better-sqlite3/build/Release/better_sqlite3.node']),
-          to: resolveFromProject(['dist/main/node_modules/better-sqlite3/build/Release/']),
-        },
-        {
-          from: resolveFromProject(['node_modules/classic-level/build/Release/*.node']),
-          to: resolveFromProject(['dist/main/node_modules/classic-level/build/Release/[name][ext]']),
-        },
-        {
-          from: resolveFromProject(['node_modules/leveldown/build/Release/*.node']),
-          to: resolveFromProject(['dist/main/node_modules/leveldown/build/Release/[name][ext]']),
+          from: resolveFromProject(['assets']),
+          to: resolveFromProject(['dist/assets']),
         },
       ],
     }),

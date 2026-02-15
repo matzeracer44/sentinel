@@ -5,7 +5,10 @@
  * Avoids spawning 15+ separate PS processes.
  */
 
-import { spawnSync } from 'child_process';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+
+const execFileAsync = promisify(execFile);
 
 const PS_TIMEOUT = 30000;
 const PS_MAX_BUFFER = 8 * 1024 * 1024;
@@ -99,14 +102,14 @@ try { $board = Get-CimInstance Win32_BaseBoard | Select-Object Manufacturer,Prod
 try { $bios = Get-CimInstance Win32_BIOS | Select-Object SMBIOSBIOSVersion,ReleaseDate } catch { $bios = $null }
 
 $tpmPresent = $false; $tpmVer = ''
-try { $t = Get-Tpm -EA Stop; $tpmPresent = $t.TpmPresent; $tpmVer = $t.ManufacturerVersion } catch {}
+try { $t = Get-Tpm -EA Stop; $tpmPresent = $t.TpmPresent; $tpmVer = $t.ManufacturerVersion } catch { <# TPM may not be present #> }
 
 $secBoot = $false
-try { $secBoot = Confirm-SecureBootUEFI -EA Stop } catch {}
+try { $secBoot = Confirm-SecureBootUEFI -EA Stop } catch { <# SecureBoot unavailable on legacy BIOS #> }
 
 try { $battery = Get-CimInstance Win32_Battery | Select-Object EstimatedChargeRemaining,EstimatedRunTime,BatteryStatus,DesignCapacity,FullChargeCapacity } catch { $battery = $null }
 $powerPlan = ''
-try { $pp = powercfg /getactivescheme 2>&1; if($pp -match '\\((.+)\\)'){$powerPlan=$Matches[1]} } catch {}
+try { $pp = powercfg /getactivescheme 2>&1; if($pp -match '\\((.+)\\)'){$powerPlan=$Matches[1]} } catch { <# powercfg may fail without admin #> }
 
 try { $audio = @(Get-CimInstance Win32_SoundDevice | Select-Object Name,Status) } catch { $audio = @() }
 try { $bt = @(Get-PnpDevice -Class Bluetooth -Status OK -EA SilentlyContinue | Select-Object FriendlyName,Status) } catch { $bt = @() }
@@ -115,23 +118,23 @@ $monitors = @()
 try {
   $mon = Get-CimInstance -Namespace root/wmi -ClassName WmiMonitorID -EA SilentlyContinue
   if($mon){foreach($m in $mon){$name=[System.Text.Encoding]::ASCII.GetString($m.UserFriendlyName).Trim([char]0);$conn=switch($m.VideoOutputTechnology){0{'VGA'}4{'DVI'}5{'HDMI'}10{'DP'}11{'DP'}default{'Other'}};$monitors+=@{Name=$name;Connection=$conn}}}
-} catch {}
+} catch { <# WMI monitor data may be unavailable #> }
 
 try { $usbDevices = @(Get-PnpDevice -Class USB -Status OK -EA SilentlyContinue | Select-Object FriendlyName,Class,Status) } catch { $usbDevices = @() }
 
 $bitlocker = @()
-try { $bitlocker = @(Get-BitLockerVolume -EA Stop | Select-Object MountPoint,ProtectionStatus,VolumeStatus,EncryptionMethod) } catch {}
+try { $bitlocker = @(Get-BitLockerVolume -EA Stop | Select-Object MountPoint,ProtectionStatus,VolumeStatus,EncryptionMethod) } catch { <# BitLocker may not be available #> }
 
 $thermal = @()
 try {
   $tz = Get-CimInstance MSAcpi_ThermalZoneTemperature -Namespace root/wmi -EA Stop
   if($tz){foreach($t in $tz){$crit=0;if($t.CriticalTripPoint){$crit=[math]::Round(($t.CriticalTripPoint-2732)/10,1)};$thermal+=@{Name=$t.InstanceName;TempC=[math]::Round(($t.CurrentTemperature-2732)/10,1);Critical=$crit}}}
-} catch {}
+} catch { <# thermal WMI class may not exist #> }
 if($thermal.Count -eq 0){
   try {
     $cpuTemp = (Get-CimInstance Win32_PerfFormattedData_Counters_ThermalZoneInformation -EA SilentlyContinue | Select -First 1).Temperature
     if($cpuTemp -and $cpuTemp -gt 0){$thermal+=@{Name='CPU Package';TempC=[math]::Round($cpuTemp-273.15,1);Critical=0}}
-  } catch {}
+  } catch { <# thermal fallback may fail #> }
 }
 
 [PSCustomObject]@{
@@ -174,15 +177,15 @@ export async function getFullHardwareReport(): Promise<HardwareReport> {
   };
 
   try {
-    const r = spawnSync('powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', '-'],
-      { input: PS_SCRIPT, timeout: PS_TIMEOUT, windowsHide: true, encoding: 'utf8', maxBuffer: PS_MAX_BUFFER }
+    const encoded = Buffer.from(PS_SCRIPT, 'utf16le').toString('base64');
+    const { stdout, stderr } = await execFileAsync('powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded],
+      { timeout: PS_TIMEOUT, windowsHide: true, encoding: 'utf8', maxBuffer: PS_MAX_BUFFER }
     );
-    if (r.error) throw r.error;
-    if (r.stderr) console.warn('[HardwareDiscovery] PS stderr:', r.stderr.substring(0, 500));
-    const raw = (r.stdout || '').trim();
+    if (stderr) console.warn('[HardwareDiscovery] PS stderr:', stderr.substring(0, 500));
+    const raw = (stdout || '').trim();
     if (!raw) {
-      console.error('[HardwareDiscovery] Empty PS output. Exit code:', r.status, 'stderr:', (r.stderr || '').substring(0, 300));
+      console.error('[HardwareDiscovery] Empty PS output');
       throw new Error('Empty PS output');
     }
     const d = JSON.parse(raw);
@@ -199,11 +202,19 @@ export async function getFullHardwareReport(): Promise<HardwareReport> {
       });
     }
 
-    // RAM
+    // RAM — WMI primary, Node.js os fallback
     const osMem = Array.isArray(d.OSMem) ? d.OSMem[0] : d.OSMem;
-    if (osMem) {
-      report.ram.totalGB = Math.round((osMem.TotalVisibleMemorySize || 0) / (1024 * 1024) * 10) / 10;
-      report.ram.freeGB = Math.round((osMem.FreePhysicalMemory || 0) / (1024 * 1024) * 10) / 10;
+    if (osMem && (osMem.TotalVisibleMemorySize || osMem.totalvisiblemorysize)) {
+      const total = osMem.TotalVisibleMemorySize || osMem.totalvisiblemorysize || 0;
+      const free = osMem.FreePhysicalMemory || osMem.freephysicalmemory || 0;
+      report.ram.totalGB = Math.round(total / (1024 * 1024) * 10) / 10;
+      report.ram.freeGB = Math.round(free / (1024 * 1024) * 10) / 10;
+      report.ram.usedGB = Math.round((report.ram.totalGB - report.ram.freeGB) * 10) / 10;
+    }
+    if (report.ram.totalGB === 0) {
+      const os = await import('os');
+      report.ram.totalGB = Math.round(os.totalmem() / (1024 ** 3) * 10) / 10;
+      report.ram.freeGB = Math.round(os.freemem() / (1024 ** 3) * 10) / 10;
       report.ram.usedGB = Math.round((report.ram.totalGB - report.ram.freeGB) * 10) / 10;
     }
     for (const r of toArr(d.RAM)) {
@@ -322,14 +333,22 @@ export async function getFullHardwareReport(): Promise<HardwareReport> {
       }),
     };
 
-    // USB devices
+    // USB devices — deduplicate by name
     const usbDevices = toArr(d.USB);
+    const seenUsb = new Set<string>();
     report.usb = {
-      devices: usbDevices.map((u: { FriendlyName?: string; Class?: string; Status?: string }) => ({
-        name: u.FriendlyName || 'Unknown Device',
-        type: u.Class || 'USB',
-        status: u.Status || 'OK',
-      })),
+      devices: usbDevices
+        .map((u: { FriendlyName?: string; Class?: string; Status?: string }) => ({
+          name: u.FriendlyName || 'Unknown Device',
+          type: u.Class || 'USB',
+          status: u.Status || 'OK',
+        }))
+        .filter((u) => {
+          const key = u.name.toLowerCase();
+          if (seenUsb.has(key)) return false;
+          seenUsb.add(key);
+          return true;
+        }),
     };
 
     // BitLocker

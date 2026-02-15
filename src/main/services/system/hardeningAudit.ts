@@ -174,7 +174,7 @@ async function checkGuestAccount(): Promise<HardeningCheck> {
 
 async function checkAuditPolicy(): Promise<HardeningCheck> {
   const out = await runPS(
-    "auditpol /get /category:* 2>$null | Select-String 'Success and Failure' | Measure-Object | Select-Object -ExpandProperty Count"
+    "auditpol /get /category:* 2>$null | Select-String 'Success and Failure|Erfolg und Fehler' | Measure-Object | Select-Object -ExpandProperty Count"
   );
   const count = parseInt(out.trim(), 10) || 0;
   return {

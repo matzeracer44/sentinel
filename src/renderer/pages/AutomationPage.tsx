@@ -6,6 +6,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { notify } from '../components/Common/SentinelNotification';
+import { useTranslation } from 'react-i18next';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const api = (): any => (window as any).electronAPI;
@@ -19,15 +20,16 @@ interface QuickAction {
 }
 
 const ACTIONS: QuickAction[] = [
-  { id: 'gaming', label: 'Gaming Mode', icon: '🎮', desc: 'Disable non-essential services, optimize network latency, reduce background processes', color: 'var(--s-cyan)' },
-  { id: 'privacy', label: 'Privacy Mode', icon: '👁', desc: 'Block telemetry, disable tracking, enforce strict DNS, clear caches', color: 'var(--s-magenta)' },
-  { id: 'lockdown', label: 'Lockdown Mode', icon: '🔒', desc: 'Block all non-essential outbound traffic, enable strict firewall rules', color: 'var(--s-red)' },
-  { id: 'performance', label: 'Performance Mode', icon: '⚡', desc: 'Clear standby cache, optimize memory, disable visual effects', color: 'var(--s-amber)' },
-  { id: 'stealth', label: 'Stealth Mode', icon: '🥷', desc: 'Minimize network footprint, disable ICMP, randomize MAC address', color: 'var(--s-purple)' },
-  { id: 'restore', label: 'Restore Defaults', icon: '↩', desc: 'Undo all mode changes and restore default system settings', color: 'var(--s-text-muted)' },
+  { id: 'gaming', label: 'automation.actions.gamingMode', icon: '🎮', desc: 'automation.actions.gamingModeDesc', color: 'var(--s-cyan)' },
+  { id: 'privacy', label: 'automation.actions.privacyMode', icon: '👁', desc: 'automation.actions.privacyModeDesc', color: 'var(--s-magenta)' },
+  { id: 'lockdown', label: 'automation.actions.lockdownMode', icon: '🔒', desc: 'automation.actions.lockdownModeDesc', color: 'var(--s-red)' },
+  { id: 'performance', label: 'automation.actions.performanceMode', icon: '⚡', desc: 'automation.actions.performanceModeDesc', color: 'var(--s-amber)' },
+  { id: 'stealth', label: 'automation.actions.stealthMode', icon: '🥷', desc: 'automation.actions.stealthModeDesc', color: 'var(--s-purple)' },
+  { id: 'restore', label: 'automation.actions.restoreDefaults', icon: '↩', desc: 'automation.actions.restoreDefaultsDesc', color: 'var(--s-text-muted)' },
 ];
 
 const AutomationPage: React.FC = () => {
+  const { t } = useTranslation();
   const [autonomousMode, setAutonomousMode] = useState(false);
   const [executing, setExecuting] = useState<string | null>(null);
   const [results, setResults] = useState<Array<{ id: string; label: string; success: boolean; message: string; timestamp: number }>>([]);
@@ -98,10 +100,10 @@ const AutomationPage: React.FC = () => {
               background: autonomousMode ? 'linear-gradient(90deg, var(--s-green), var(--s-cyan))' : 'var(--s-text)',
               WebkitBackgroundClip: 'text', WebkitTextFillColor: autonomousMode ? 'transparent' : 'var(--s-text)',
             }}>
-              Autonomous Mode
+              {t('automation.autonomousMode')}
             </div>
             <div style={{ fontSize: '0.75rem', color: 'var(--s-text-muted)', marginTop: 2 }}>
-              {autonomousMode ? 'Active — Sentinel auto-responds to threats' : 'Disabled — Manual threat response only'}
+              {autonomousMode ? t('automation.autonomousActive') : t('automation.autonomousDisabled')}
             </div>
           </div>
         </div>
@@ -113,7 +115,7 @@ const AutomationPage: React.FC = () => {
             boxShadow: autonomousMode ? '0 0 16px rgba(61,255,143,0.15)' : 'none',
           }}
         >
-          {autonomousMode ? '✓ Enabled' : 'Enable'}
+          {autonomousMode ? `✓ ${t('common.enabled')}` : t('common.enable')}
         </button>
       </motion.div>
 
@@ -124,7 +126,7 @@ const AutomationPage: React.FC = () => {
             fontWeight: 700, fontSize: '0.9rem', fontFamily: 'var(--s-font-display)',
             background: 'linear-gradient(90deg, var(--s-cyan), rgba(167,139,250,0.8))',
             WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
-          }}>Quick Actions</span>
+          }}>{t('dashboard.quickActions')}</span>
           <div className="s-section-divider" style={{ flex: 1 }} />
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 }}>
@@ -148,13 +150,13 @@ const AutomationPage: React.FC = () => {
                 }}>
                   {action.icon}
                 </div>
-                <div style={{ fontWeight: 600, fontSize: '0.875rem' }}>{action.label}</div>
+                <div style={{ fontWeight: 600, fontSize: '0.875rem' }}>{t(action.label)}</div>
               </div>
-              <div style={{ fontSize: '0.7rem', color: 'var(--s-text-muted)', lineHeight: 1.5, flex: 1 }}>{action.desc}</div>
+              <div style={{ fontSize: '0.7rem', color: 'var(--s-text-muted)', lineHeight: 1.5, flex: 1 }}>{t(action.desc)}</div>
               <div style={{ width: '100%', height: 2, borderRadius: 1, background: `linear-gradient(90deg, ${action.color}55, transparent)` }} />
               {executing === action.id && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.65rem', color: action.color }}>
-                  <span className="s-loading-spinner-sm" style={{ borderTopColor: action.color }} /> Executing...
+                  <span className="s-loading-spinner-sm" style={{ borderTopColor: action.color }} /> {t('common.loading')}
                 </div>
               )}
             </motion.div>
@@ -170,7 +172,7 @@ const AutomationPage: React.FC = () => {
               fontWeight: 700, fontSize: '0.9rem', fontFamily: 'var(--s-font-display)',
               background: 'linear-gradient(90deg, var(--s-cyan), rgba(167,139,250,0.8))',
               WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
-            }}>Execution Log</span>
+            }}>{t('automation.executionLog')}</span>
             <div className="s-section-divider" style={{ flex: 1 }} />
             <span style={{ fontSize: '0.6rem', color: 'var(--s-text-dim)' }}>{results.length} entries</span>
           </div>

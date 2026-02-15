@@ -421,6 +421,15 @@ class ThreatIntelAggregator:
                     results[source] = {"source": source, "available": False, "error": "timeout"}
         return results
 
+    def close_sessions(self):
+        """Close all API client sessions to prevent TCP CloseWait pile-up."""
+        for client in (self.vt, self.abuseipdb, self.otx, self.ipinfo):
+            try:
+                if hasattr(client, 's') and client.s:
+                    client.s.close()
+            except Exception:
+                pass
+
     def full_analysis(self, url: str, domain: str, ip: Optional[str] = None,
                       timeout: float = 15.0) -> Dict[str, Any]:
         """Run all three analysis tiers in parallel and merge results.

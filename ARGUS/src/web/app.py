@@ -80,7 +80,14 @@ def create_app(argus):
             return jsonify({'error': 'URL is required'}), 400
         try:
             force = data.get('force', False)
-            result = argus.scan_url(data['url'], force=bool(force))
+            deep_fetch = data.get('deep_fetch', False)
+            result = argus.scan_url(data['url'], force=bool(force),
+                                    deep_fetch=bool(deep_fetch))
+            # Close sessions after scan to prevent CloseWait TCP pile-up
+            try:
+                argus.url_detector.close_sessions()
+            except Exception:
+                pass
             return jsonify(_sanitize_response(result))
         except Exception as e:
             return jsonify({'error': str(_sanitize_response(str(e)))}), 500
@@ -121,7 +128,8 @@ def create_app(argus):
         if not isinstance(urls, list):
             return jsonify({'error': 'URLs must be a list'}), 400
         try:
-            results = argus.scan_urls(urls)
+            deep_fetch = data.get('deep_fetch', False)
+            results = argus.scan_urls(urls, deep_fetch=bool(deep_fetch))
             return jsonify({'results': results})
         except Exception as e:
             return jsonify({'error': str(e)}), 500

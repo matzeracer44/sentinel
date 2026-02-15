@@ -78,6 +78,17 @@ export const BlockPidSchema = z.object({
 });
 export type BlockPidRequest = z.infer<typeof BlockPidSchema>;
 
+export const BlockIPSchema = z.object({
+  ip: IPSchema,
+  reason: z.string().min(1).max(500),
+});
+export type BlockIPRequest = z.infer<typeof BlockIPSchema>;
+
+export const UnblockIPSchema = z.object({
+  ip: IPSchema,
+});
+export type UnblockIPRequest = z.infer<typeof UnblockIPSchema>;
+
 export const BlockIpSubnetSchema = z.object({
   ip: z.string().min(1),
   subnetMask: SubnetMaskSchema,

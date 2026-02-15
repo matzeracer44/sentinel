@@ -1,10 +1,27 @@
-import { execSync } from 'child_process';
+import { execFile, execSync } from 'child_process';
+import { promisify } from 'util';
 import { getExecOptions } from './execOptions';
 
-function execPowerShell(command: string): string {
-  const fullCommand = `powershell -ExecutionPolicy Bypass -NoProfile -Command "${command}"`;
+const execFileAsync = promisify(execFile);
+
+/**
+ * Sanitize a string for safe embedding in a PowerShell double-quoted context.
+ * Strips characters that can break out of quotes or inject commands.
+ */
+function sanitizePSArg(input: string): string {
+  return input.replace(/["`$();|&><{}\\]/g, '');
+}
+
+async function execPowerShell(command: string): Promise<string> {
+  const encoded = Buffer.from(command, 'utf16le').toString('base64');
+  const opts = getExecOptions();
   try {
-    return execSync(fullCommand, getExecOptions()).toString().trim();
+    const { stdout } = await execFileAsync(
+      'powershell',
+      ['-NoLogo', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-NoProfile', '-EncodedCommand', encoded],
+      opts,
+    ) as { stdout: string };
+    return (stdout || '').trim();
   } catch (error: any) {
     console.error('PowerShell execution error:', error.message);
     throw new Error(`PowerShell execution error: ${error.message}`);
@@ -28,7 +45,7 @@ export interface StartupProgram {
 
 export async function getProcessesEnhanced(): Promise<ProcessInfo[]> {
   const cmd = `Get-Process | Select-Object Name,Id,@{n="RAM_MB";e={[math]::Round($_.WorkingSet64/1MB,2)}},@{n="CPU";e={$_.CPU}},Path | Sort-Object RAM_MB -Descending | Select-Object -First 20 | ConvertTo-Json`;
-  const result = execPowerShell(cmd);
+  const result = await execPowerShell(cmd);
 
   const processes = JSON.parse(result);
   return Array.isArray(processes) ? processes.map((p: any) => ({
@@ -41,8 +58,10 @@ export async function getProcessesEnhanced(): Promise<ProcessInfo[]> {
 }
 
 export async function killProcess(pid: number): Promise<boolean> {
+  const safePid = Math.floor(Number(pid));
+  if (!Number.isFinite(safePid) || safePid < 0 || safePid > 999999) return false;
   try {
-    execSync(`taskkill /F /PID ${pid}`, { windowsHide: true });
+    execSync(`taskkill /F /PID ${safePid}`, { windowsHide: true });
     console.log(`✓ Process ${pid} killed`);
     return true;
   } catch (error: any) {
@@ -53,7 +72,7 @@ export async function killProcess(pid: number): Promise<boolean> {
 
 export async function getStartupPrograms(): Promise<StartupProgram[]> {
   const cmd = `Get-WmiObject Win32_StartupCommand | Select-Object Name,Command,Location | ConvertTo-Json`;
-  const result = execPowerShell(cmd);
+  const result = await execPowerShell(cmd);
 
   const programs = JSON.parse(result);
   const programArray = Array.isArray(programs) ? programs : [programs];
@@ -79,9 +98,11 @@ export async function getStartupPrograms(): Promise<StartupProgram[]> {
 
 export async function disableStartupProgram(name: string): Promise<boolean> {
   try {
-    const cmd = `Disable-ScheduledTask -TaskName "${name}" -ErrorAction SilentlyContinue`;
-    execPowerShell(cmd);
-    console.log(`✓ Startup program disabled: ${name}`);
+    const safeName = sanitizePSArg(name);
+    if (!safeName) return false;
+    const cmd = `Disable-ScheduledTask -TaskName "${safeName}" -ErrorAction SilentlyContinue`;
+    await execPowerShell(cmd);
+    console.log(`✓ Startup program disabled: ${safeName}`);
     return true;
   } catch (error: any) {
     console.error(`Error disabling startup program ${name}:`, error);
@@ -91,20 +112,20 @@ export async function disableStartupProgram(name: string): Promise<boolean> {
 
 export async function enableStartupProgram(name: string, command?: string): Promise<boolean> {
   try {
-    // Try enabling a scheduled task first
-    const enableCmd = `Enable-ScheduledTask -TaskName "${name}" -ErrorAction SilentlyContinue`;
-    execPowerShell(enableCmd);
+    const safeName = sanitizePSArg(name);
+    if (!safeName) return false;
+    const enableCmd = `Enable-ScheduledTask -TaskName "${safeName}" -ErrorAction SilentlyContinue`;
+    await execPowerShell(enableCmd);
 
     // If the scheduled task enabling did nothing and a command is provided,
     // fall back to creating a registry Run entry for the current user.
     if (command && command.trim().length > 0) {
-      const safeName = name.replace(/"/g, '');
-      const safeCommand = command.replace(/"/g, '\\"');
+      const safeCommand = sanitizePSArg(command);
       const regCmd = `New-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name '${safeName}' -Value '${safeCommand}' -PropertyType String -Force`;
-      execPowerShell(regCmd);
+      await execPowerShell(regCmd);
     }
 
-    console.log(`✓ Startup program enabled: ${name}`);
+    console.log(`✓ Startup program enabled: ${safeName}`);
     return true;
   } catch (error: any) {
     console.error(`Error enabling startup program ${name}:`, error);

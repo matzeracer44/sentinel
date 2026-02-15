@@ -8,6 +8,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { notify } from '../components/Common/SentinelNotification';
+import { useTranslation } from 'react-i18next';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const api = (): any => (window as any).electronAPI;
@@ -112,6 +113,7 @@ const RISK_COLORS: Record<RiskLevel, string> = {
 };
 
 const FirewallPage: React.FC = () => {
+  const { t } = useTranslation();
   const location = useLocation();
   const navigate = useNavigate();
   const navState = (location.state || {}) as { prefillIP?: string; source?: string; process?: string; pid?: number };
@@ -294,11 +296,11 @@ const FirewallPage: React.FC = () => {
   const handleUndo = async () => { await api()?.shield?.undoFirewall?.(); fetchData(); };
   const handleRedo = async () => { await api()?.shield?.redoFirewall?.(); fetchData(); };
 
-  const TABS: { key: Tab; label: string; count?: number }[] = [
-    { key: 'rules', label: 'Firewall Rules', count: rules.length },
-    { key: 'block', label: 'Block Controls' },
-    { key: 'pending', label: 'Pending', count: pendingRules.length },
-    { key: 'sentinel', label: 'Sentinel Rules', count: sentinelRules.length },
+  const TABS: { key: Tab; labelKey: string; count?: number }[] = [
+    { key: 'rules', labelKey: 'firewall.tabs.rules', count: rules.length },
+    { key: 'block', labelKey: 'firewall.tabs.blocking', count: undefined },
+    { key: 'pending', labelKey: 'firewall.tabs.pending', count: pendingRules.length },
+    { key: 'sentinel', labelKey: 'firewall.tabs.sentinel', count: sentinelRules.length },
   ];
 
   return (
@@ -306,10 +308,10 @@ const FirewallPage: React.FC = () => {
       {/* ─── Spacy Header ─── */}
       <div className="s-page-header">
         <div className="s-tab-bar">
-          {TABS.map((t) => (
-            <button key={t.key} className={`s-tab ${tab === t.key ? 's-tab-active' : ''}`} onClick={() => setTab(t.key)}>
-              {t.label}
-              {t.count !== undefined && <span className="s-tab-badge">{t.count}</span>}
+          {TABS.map((tb) => (
+            <button key={tb.key} className={`s-tab ${tab === tb.key ? 's-tab-active' : ''}`} onClick={() => setTab(tb.key)}>
+              {t(tb.labelKey)}
+              {tb.count !== undefined && <span className="s-tab-badge">{tb.count}</span>}
             </button>
           ))}
         </div>
@@ -346,7 +348,7 @@ const FirewallPage: React.FC = () => {
             <option value="json">JSON</option>
           </select>
           <button className="s-btn s-btn-primary s-btn-sm" style={{ borderRadius: 8, fontSize: '0.65rem' }} onClick={fetchData} disabled={loading}>
-            {loading ? '...' : '↻ Refresh'}
+            {loading ? '...' : `↻ ${t('common.refresh')}`}
           </button>
         </div>
       </div>
@@ -354,10 +356,10 @@ const FirewallPage: React.FC = () => {
       {/* Bulk Actions Bar */}
       {selected.size > 0 && tab === 'rules' && (
         <div className="s-bulk-bar">
-          <span className="s-bulk-bar-count">{selected.size} selected</span>
-          <button className="s-btn s-btn-danger s-btn-sm" onClick={handleBulkDelete}>Delete Selected</button>
-          <button className="s-btn s-btn-ghost s-btn-sm" onClick={handleBulkDisable}>Disable Selected</button>
-          <button className="s-btn s-btn-ghost s-btn-sm" onClick={() => setSelected(new Set())}>Cancel</button>
+          <span className="s-bulk-bar-count">{selected.size} {t('common.actions')}</span>
+          <button className="s-btn s-btn-danger s-btn-sm" onClick={handleBulkDelete}>{t('common.delete')}</button>
+          <button className="s-btn s-btn-ghost s-btn-sm" onClick={handleBulkDisable}>{t('common.disabled')}</button>
+          <button className="s-btn s-btn-ghost s-btn-sm" onClick={() => setSelected(new Set())}>{t('common.cancel')}</button>
         </div>
       )}
 
@@ -378,11 +380,11 @@ const FirewallPage: React.FC = () => {
                     style={{ padding: '4px 10px', fontSize: '0.65rem' }}
                     onClick={() => setDirectionFilter(d)}
                   >
-                    {d === 'all' ? `All (${rules.length})` : d === 'inbound' ? `In (${ruleStats.inbound})` : `Out (${ruleStats.outbound})`}
+                    {d === 'all' ? `${t('common.all')} (${rules.length})` : d === 'inbound' ? `${t('firewall.rules.inbound')} (${ruleStats.inbound})` : `${t('firewall.rules.outbound')} (${ruleStats.outbound})`}
                   </button>
                 ))}
               </div>
-              <input className="s-input" placeholder="Search rules..." value={searchFilter} onChange={(e) => setSearchFilter(e.target.value)} style={{ maxWidth: 320, flex: 1, padding: '5px 10px', fontSize: '0.7rem', borderRadius: 8 }} />
+              <input className="s-input" placeholder={t('firewall.rules.searchPlaceholder')} value={searchFilter} onChange={(e) => setSearchFilter(e.target.value)} style={{ maxWidth: 320, flex: 1, padding: '5px 10px', fontSize: '0.7rem', borderRadius: 8 }} />
               <div style={{ display: 'flex', gap: 10, fontSize: '0.6rem', color: 'var(--s-text-dim)', marginLeft: 'auto' }}>
                 <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                   <span style={{ width: 5, height: 5, borderRadius: '50%', background: 'var(--s-red)', boxShadow: '0 0 4px var(--s-red)' }} />
@@ -399,21 +401,21 @@ const FirewallPage: React.FC = () => {
                 <thead>
                   <tr>
                     <th style={{ width: 36 }}><input type="checkbox" className="s-checkbox" checked={selected.size > 0 && selected.size === filteredRules.length} onChange={toggleSelectAll} /></th>
-                    <th>Rule Name</th>
-                    <th>Dir</th>
-                    <th>Action</th>
-                    <th>Risk</th>
-                    <th>Protocol</th>
-                    <th>Port</th>
-                    <th>Program</th>
-                    <th>Remote</th>
-                    <th style={{ width: 120 }}>Actions</th>
+                    <th>{t('firewall.rules.name')}</th>
+                    <th>{t('firewall.rules.direction')}</th>
+                    <th>{t('firewall.rules.action')}</th>
+                    <th>{t('scan.riskLevel')}</th>
+                    <th>{t('firewall.rules.protocol')}</th>
+                    <th>{t('firewall.rules.localPort')}</th>
+                    <th>{t('network.processes.name')}</th>
+                    <th>{t('firewall.rules.remoteAddress')}</th>
+                    <th style={{ width: 120 }}>{t('common.actions')}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredRules.length === 0 ? (
                     <tr><td colSpan={10} style={{ textAlign: 'center', padding: 32, color: 'var(--s-text-dim)' }}>
-                      {loading ? 'Loading...' : 'No firewall rules found'}
+                      {loading ? t('common.loading') : t('firewall.rules.noRules')}
                     </td></tr>
                   ) : filteredRules.slice(0, 200).map((rule, i) => {
                     const en = isEnabled(rule.enabled);
@@ -445,7 +447,7 @@ const FirewallPage: React.FC = () => {
             </div>
             {filteredRules.length > 200 && (
               <div style={{ padding: '8px 18px', textAlign: 'center', fontSize: '0.75rem', color: 'var(--s-text-dim)', borderTop: '1px solid var(--s-border)' }}>
-                Showing 200 of {filteredRules.length} rules. Use search to narrow down.
+                {t('common.total')}: {filteredRules.length}
               </div>
             )}
           </motion.div>
@@ -457,20 +459,20 @@ const FirewallPage: React.FC = () => {
             {/* Block IP */}
             <div className="s-card-spacy">
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
-                <span style={{ fontWeight: 700, fontSize: '0.85rem', fontFamily: 'var(--s-font-display)', background: 'linear-gradient(90deg, var(--s-red), var(--s-amber))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>Block IP Address</span>
+                <span style={{ fontWeight: 700, fontSize: '0.85rem', fontFamily: 'var(--s-font-display)', background: 'linear-gradient(90deg, var(--s-red), var(--s-amber))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>{t('firewall.blocking.blockIP')}</span>
                 <div className="s-section-divider" style={{ flex: 1 }} />
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 <input className="s-input" placeholder="IP address (e.g. 192.168.1.100)" value={blockIp} onChange={(e) => setBlockIp(e.target.value)} />
                 <input className="s-input" placeholder="Reason (optional)" value={blockReason} onChange={(e) => setBlockReason(e.target.value)} />
-                <button className="s-btn s-btn-danger" onClick={handleBlockIp} disabled={!blockIp.trim()}>Block IP</button>
+                <button className="s-btn s-btn-danger" onClick={handleBlockIp} disabled={!blockIp.trim()}>{t('firewall.blocking.blockIP')}</button>
               </div>
             </div>
 
             {/* Block Port */}
             <div className="s-card-spacy">
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
-                <span style={{ fontWeight: 700, fontSize: '0.85rem', fontFamily: 'var(--s-font-display)', background: 'linear-gradient(90deg, var(--s-red), var(--s-magenta))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>Block Port</span>
+                <span style={{ fontWeight: 700, fontSize: '0.85rem', fontFamily: 'var(--s-font-display)', background: 'linear-gradient(90deg, var(--s-red), var(--s-magenta))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>{t('firewall.blocking.blockPort')}</span>
                 <div className="s-section-divider" style={{ flex: 1 }} />
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -487,31 +489,31 @@ const FirewallPage: React.FC = () => {
                     <option value="out">Outbound</option>
                   </select>
                 </div>
-                <button className="s-btn s-btn-danger" onClick={handleBlockPort} disabled={!blockPortVal.trim()}>Block Port</button>
+                <button className="s-btn s-btn-danger" onClick={handleBlockPort} disabled={!blockPortVal.trim()}>{t('firewall.blocking.blockPort')}</button>
               </div>
             </div>
 
             {/* Block Subnet */}
             <div className="s-card-spacy">
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
-                <span style={{ fontWeight: 700, fontSize: '0.85rem', fontFamily: 'var(--s-font-display)', background: 'linear-gradient(90deg, var(--s-amber), var(--s-red))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>Block Subnet</span>
+                <span style={{ fontWeight: 700, fontSize: '0.85rem', fontFamily: 'var(--s-font-display)', background: 'linear-gradient(90deg, var(--s-amber), var(--s-red))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>{t('firewall.blocking.blockSubnet')}</span>
                 <div className="s-section-divider" style={{ flex: 1 }} />
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 <input className="s-input" placeholder="CIDR (e.g. 10.0.0.0/8)" value={blockSubnet} onChange={(e) => setBlockSubnet(e.target.value)} />
-                <button className="s-btn s-btn-danger" onClick={handleBlockSubnet} disabled={!blockSubnet.trim()}>Block Subnet</button>
+                <button className="s-btn s-btn-danger" onClick={handleBlockSubnet} disabled={!blockSubnet.trim()}>{t('firewall.blocking.blockSubnet')}</button>
               </div>
             </div>
 
             {/* Block PID */}
             <div className="s-card-spacy">
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
-                <span style={{ fontWeight: 700, fontSize: '0.85rem', fontFamily: 'var(--s-font-display)', background: 'linear-gradient(90deg, var(--s-magenta), var(--s-red))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>Block by PID</span>
+                <span style={{ fontWeight: 700, fontSize: '0.85rem', fontFamily: 'var(--s-font-display)', background: 'linear-gradient(90deg, var(--s-magenta), var(--s-red))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>{t('firewall.blocking.blockPID')}</span>
                 <div className="s-section-divider" style={{ flex: 1 }} />
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 <input className="s-input" placeholder="Process ID" value={blockPid} onChange={(e) => setBlockPid(e.target.value)} type="number" />
-                <button className="s-btn s-btn-danger" onClick={handleBlockPid} disabled={!blockPid.trim()}>Block PID</button>
+                <button className="s-btn s-btn-danger" onClick={handleBlockPid} disabled={!blockPid.trim()}>{t('firewall.blocking.blockPID')}</button>
               </div>
             </div>
 
@@ -556,8 +558,8 @@ const FirewallPage: React.FC = () => {
         {tab === 'sentinel' && (
           <motion.div key="sentinel" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="s-card-spacy">
             <div className="s-flex-between" style={{ marginBottom: 16 }}>
-              <div className="s-heading-md">Sentinel-Managed Rules ({sentinelRules.length})</div>
-              <button className="s-btn s-btn-danger s-btn-sm" onClick={async () => { await api()?.shield?.clearSentinelRules?.(); fetchData(); }}>Clear All</button>
+              <div className="s-heading-md">{t('firewall.sentinel.title')} ({sentinelRules.length})</div>
+              <button className="s-btn s-btn-danger s-btn-sm" onClick={async () => { await api()?.shield?.clearSentinelRules?.(); fetchData(); }}>{t('common.clearAll')}</button>
             </div>
             {sentinelRules.length === 0 ? (
               <div style={{ textAlign: 'center', padding: 24, color: 'var(--s-text-dim)' }}>No sentinel-managed rules</div>

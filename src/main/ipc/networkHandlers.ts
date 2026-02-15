@@ -4,10 +4,16 @@
  */
 
 import { ipcMain } from 'electron';
-import { execSync, spawn } from 'child_process';
+import { exec, spawn } from 'child_process';
+import { promisify } from 'util';
+const execAsyncNet = promisify(exec);
+async function runCmd(cmd: string, opts: Record<string, any> = {}): Promise<string> {
+  const { stdout } = await execAsyncNet(cmd, { encoding: 'utf8', windowsHide: true, timeout: 10000, ...opts });
+  return (stdout || '').trim();
+}
 import * as os from 'os';
 import { IPC } from '../../shared/constants';
-import { serializeError } from '../../shared/utils';
+import { serializeError, validateIPForShell } from '../../shared/utils';
 import { getNetworkTrafficSnapshot, getFullNetworkAudit, registerAddressWatch, getAddressWatchSummary } from '../services/networkMonitor';
 import { inspectTLS } from '../services/tlsInspector';
 import { killProcess as killProcessService } from '../services/shieldData';
@@ -103,11 +109,15 @@ $result | ConvertTo-Json -Depth 10`;
         let deviceType = 'Computer/Device';
         try {
           try {
-            const hostnameCmd = `powershell -Command "Resolve-DnsName -Name ${ip} -Type PTR -ErrorAction SilentlyContinue | Select-Object -ExpandProperty NameHost"`;
-            hostname = execSync(hostnameCmd, { timeout: 3000 }).toString().trim() || 'Unknown';
+            const safeIp = validateIPForShell(ip);
+            if (!safeIp) throw new Error('Invalid IP');
+            const hostnameCmd = `powershell -NoProfile -Command "Resolve-DnsName -Name ${safeIp} -Type PTR -ErrorAction SilentlyContinue | Select-Object -ExpandProperty NameHost"`;
+            hostname = (await runCmd(hostnameCmd, { timeout: 3000 })) || 'Unknown';
           } catch { hostname = 'Unknown'; }
           try {
-            const arpOutput = execSync(`arp -a ${ip}`, { timeout: 2000 }).toString();
+            const safeArpIp = validateIPForShell(ip);
+            if (!safeArpIp) throw new Error('Invalid IP');
+            const arpOutput = await runCmd(`arp -a ${safeArpIp}`, { timeout: 2000 });
             const macMatch = arpOutput.match(/([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})/);
             if (macMatch) {
               macAddress = macMatch[0].toUpperCase().replace(/-/g, ':');
@@ -244,8 +254,8 @@ $result | ConvertTo-Json -Depth 10`;
   ipcMain.handle(IPC.NETWORK.GET_PROCESSES, async () => {
     try {
       // tasklist columns: "Image Name","PID","Session Name","Session#","Mem Usage"
-      const taskListOutput = execSync('tasklist /FO CSV /NH', { encoding: 'utf-8', windowsHide: true, timeout: 10000 });
-      return taskListOutput.split('\n').filter((l) => l.trim()).slice(0, 50).map((line) => {
+      const taskListOutput = await runCmd('tasklist /FO CSV /NH');
+      return taskListOutput.split('\n').filter((l) => l.trim()).map((line) => {
         const cols = line.split(',').map((s) => s.replace(/"/g, '').trim());
         const name = cols[0] || 'Unknown';
         const pid = parseInt(cols[1], 10);
@@ -289,10 +299,10 @@ $result | ConvertTo-Json -Depth 10`;
       // Real disk
       let diskPercent = -1;
       try {
-        const diskOut = execSync(
+        const diskOut = await runCmd(
           'powershell -NoProfile -Command "(Get-PSDrive C).Used / ((Get-PSDrive C).Used + (Get-PSDrive C).Free) * 100"',
-          { encoding: 'utf-8', timeout: 5000, windowsHide: true }
-        ).trim();
+          { timeout: 5000 }
+        );
         diskPercent = Math.round(parseFloat(diskOut));
         if (isNaN(diskPercent)) diskPercent = -1;
       } catch { diskPercent = -1; }

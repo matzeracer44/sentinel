@@ -6,6 +6,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import { notify } from '../components/Common/SentinelNotification';
+import { useTranslation } from 'react-i18next';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const api = (): any => (window as any).electronAPI;
@@ -77,7 +78,8 @@ const TIER_COLORS: Record<string, string> = {
 };
 
 const SettingsPage: React.FC = () => {
-  const [settings, setSettings] = useState<Settings>({ language: 'de', theme: 'dark', autostart: false, autoUpdate: false });
+  const { t, i18n } = useTranslation();
+  const [settings, setSettings] = useState<Settings>({ language: i18n.language || 'en', theme: 'dark', autostart: false, autoUpdate: false });
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
   const [argusHealth, setArgusHealth] = useState<ArgusHealth | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
@@ -159,6 +161,10 @@ const SettingsPage: React.FC = () => {
           return;
         }
       }
+      if (key === 'language') {
+        i18n.changeLanguage(String(value));
+        try { api()?.shield?.setScanLanguage?.(String(value)); } catch { /* best-effort */ }
+      }
       await api()?.saveSettings?.(key, value);
       setSettings((prev) => ({ ...prev, [key]: value }));
       setMessage(`${key} updated`);
@@ -200,13 +206,13 @@ const SettingsPage: React.FC = () => {
               fontWeight: 700, fontSize: '0.9rem', fontFamily: 'var(--s-font-display)',
               background: 'linear-gradient(90deg, var(--s-cyan), rgba(167,139,250,0.8))',
               WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
-            }}>General</span>
+            }}>{t('settings.tabs.general')}</span>
             <div className="s-section-divider" style={{ flex: 1 }} />
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             {/* Language */}
             <div>
-              <label className="s-caption" style={{ display: 'block', marginBottom: 6 }}>Language</label>
+              <label className="s-caption" style={{ display: 'block', marginBottom: 6 }}>{t('settings.general.language')}</label>
               <select className="s-select s-input" value={settings.language} onChange={(e) => saveSetting('language', e.target.value)} style={{ width: '100%' }}>
                 <option value="de">Deutsch</option>
                 <option value="en">English</option>
@@ -217,7 +223,7 @@ const SettingsPage: React.FC = () => {
 
             {/* Theme */}
             <div>
-              <label className="s-caption" style={{ display: 'block', marginBottom: 6 }}>Theme</label>
+              <label className="s-caption" style={{ display: 'block', marginBottom: 6 }}>{t('common.type') === 'Typ' ? 'Design' : 'Theme'}</label>
               <select className="s-select s-input" value={settings.theme} onChange={(e) => saveSetting('theme', e.target.value)} style={{ width: '100%' }}>
                 <option value="dark">Dark (Cyber)</option>
                 <option value="midnight">Midnight</option>
@@ -227,8 +233,8 @@ const SettingsPage: React.FC = () => {
 
             {/* Toggles */}
             {[
-              { key: 'autostart', label: 'Start with Windows' },
-              { key: 'autoUpdate', label: 'Auto-update' },
+              { key: 'autostart', label: t('settings.general.autostart') },
+              { key: 'autoUpdate', label: t('common.type') === 'Typ' ? 'Auto-Update' : 'Auto-update' },
             ].map((toggle) => (
               <div key={toggle.key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <span style={{ fontSize: '0.8125rem' }}>{toggle.label}</span>
@@ -237,7 +243,7 @@ const SettingsPage: React.FC = () => {
                   onClick={() => saveSetting(toggle.key, !(settings as unknown as Record<string, unknown>)[toggle.key])}
                   style={{ minWidth: 80 }}
                 >
-                  {(settings as unknown as Record<string, unknown>)[toggle.key] ? 'On' : 'Off'}
+                  {(settings as unknown as Record<string, unknown>)[toggle.key] ? t('common.on') : t('common.off')}
                 </button>
               </div>
             ))}
@@ -251,13 +257,13 @@ const SettingsPage: React.FC = () => {
               fontWeight: 700, fontSize: '0.9rem', fontFamily: 'var(--s-font-display)',
               background: 'linear-gradient(90deg, var(--s-green), var(--s-cyan))',
               WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
-            }}>System Status</span>
+            }}>{t('common.type') === 'Typ' ? 'Systemstatus' : 'System Status'}</span>
             <div className="s-section-divider" style={{ flex: 1 }} />
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {/* Admin */}
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 10px', borderRadius: 8, background: isAdmin ? 'rgba(61,255,143,0.04)' : 'rgba(255,190,61,0.04)' }}>
-              <span style={{ fontSize: '0.8125rem', color: 'var(--s-text-secondary)' }}>Admin Privileges</span>
+              <span style={{ fontSize: '0.8125rem', color: 'var(--s-text-secondary)' }}>{t('common.type') === 'Typ' ? 'Administratorrechte' : 'Admin Privileges'}</span>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <span style={{
                   width: 6, height: 6, borderRadius: '50%',
@@ -286,7 +292,7 @@ const SettingsPage: React.FC = () => {
 
             {/* Version */}
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 10px', borderRadius: 8, background: 'rgba(109,120,255,0.04)' }}>
-              <span style={{ fontSize: '0.8125rem', color: 'var(--s-text-secondary)' }}>Sentinel Version</span>
+              <span style={{ fontSize: '0.8125rem', color: 'var(--s-text-secondary)' }}>{t('settings.advanced.version')}</span>
               <span style={{
                 fontFamily: 'var(--s-font-mono)', fontSize: '0.75rem', fontWeight: 700,
                 padding: '2px 8px', borderRadius: 6,
@@ -309,7 +315,7 @@ const SettingsPage: React.FC = () => {
                 } catch (e: any) { notify.error(e?.message || 'Export failed'); }
               }}
             >
-              Export Security Report (HTML/JSON)
+              {t('settings.general.exportReport')} (HTML/JSON)
             </button>
 
             {/* Config Export / Import */}
@@ -325,7 +331,7 @@ const SettingsPage: React.FC = () => {
                   } catch (e: any) { notify.error(e?.message || 'Export failed'); }
                 }}
               >
-                Backup Config
+                {t('settings.general.backupConfig')}
               </button>
               <button
                 className="s-btn s-btn-ghost s-btn-sm"
@@ -340,13 +346,15 @@ const SettingsPage: React.FC = () => {
                   } catch (e: any) { notify.error(e?.message || 'Import failed'); }
                 }}
               >
-                Restore Config
+                {t('settings.general.restoreConfig')}
               </button>
             </div>
 
             {/* Tray Info */}
             <div style={{ fontSize: '0.675rem', color: 'var(--s-text-dim)', padding: '4px 8px', borderRadius: 6, background: 'rgba(109,120,255,0.03)' }}>
-              Sentinel runs in system tray. Closing the window minimizes to tray — protection stays active.
+              {t('common.type') === 'Typ'
+                ? 'Sentinel läuft im System-Tray. Das Schließen des Fensters minimiert in den Tray — der Schutz bleibt aktiv.'
+                : 'Sentinel runs in system tray. Closing the window minimizes to tray — protection stays active.'}
             </div>
 
             <div className="s-section-divider" style={{ margin: '4px 0' }} />
@@ -370,10 +378,10 @@ const SettingsPage: React.FC = () => {
                 fontWeight: 700, fontSize: '0.9rem', fontFamily: 'var(--s-font-display)',
                 background: 'linear-gradient(90deg, var(--s-cyan), var(--s-purple))',
                 WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
-              }}>Performance Profile</span>
+              }}>{t('settings.profiles.title')}</span>
               <div className="s-section-divider" style={{ flex: 1, maxWidth: 100 }} />
             </div>
-            <button className="s-btn s-btn-ghost s-btn-sm" onClick={handleRefreshHardware}>Re-detect Hardware</button>
+            <button className="s-btn s-btn-ghost s-btn-sm" onClick={handleRefreshHardware}>{t('settings.profiles.refreshHardware')}</button>
           </div>
 
           {/* Hardware Info */}
@@ -393,7 +401,7 @@ const SettingsPage: React.FC = () => {
               </div>
             </div>
             <div className="s-card-compact-spacy">
-              <div className="s-caption" style={{ marginBottom: 4 }}>Detected Tier</div>
+              <div className="s-caption" style={{ marginBottom: 4 }}>{t('settings.profiles.current')}</div>
               <div style={{ fontSize: '0.8125rem', fontWeight: 700, color: TIER_COLORS[perfProfile.hardware.tier] || 'var(--s-text)' }}>
                 {perfProfile.hardware.tier.toUpperCase()}
               </div>
@@ -402,7 +410,7 @@ const SettingsPage: React.FC = () => {
               </div>
             </div>
             <div className="s-card-compact-spacy">
-              <div className="s-caption" style={{ marginBottom: 4 }}>Active Mode</div>
+              <div className="s-caption" style={{ marginBottom: 4 }}>{t('settings.profiles.apply')}</div>
               <div style={{ fontSize: '0.8125rem', fontWeight: 600 }}>{perfProfile.mode.toUpperCase()}</div>
               <div style={{ fontSize: '0.6875rem', color: 'var(--s-text-muted)', marginTop: 2 }}>
                 Since {new Date(perfProfile.detectedAt).toLocaleTimeString('de-DE')}
@@ -412,7 +420,7 @@ const SettingsPage: React.FC = () => {
 
           {/* Mode Selector */}
           <div style={{ marginBottom: 16 }}>
-            <div className="s-caption" style={{ marginBottom: 8 }}>Profile Mode</div>
+            <div className="s-caption" style={{ marginBottom: 8 }}>{t('settings.profiles.title')}</div>
             <div style={{ display: 'flex', gap: 8 }}>
               {PERF_MODES.map((m) => (
                 <button
@@ -430,7 +438,7 @@ const SettingsPage: React.FC = () => {
 
           {/* Adaptive Settings Grid */}
           <div>
-            <div className="s-caption" style={{ marginBottom: 8 }}>Active Settings</div>
+            <div className="s-caption" style={{ marginBottom: 8 }}>{t('settings.advanced.title')}</div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
               {[
                 { label: 'PS Timeout', value: `${perfProfile.settings.powershellTimeout}ms` },
@@ -460,7 +468,7 @@ const SettingsPage: React.FC = () => {
             fontWeight: 700, fontSize: '0.9rem', fontFamily: 'var(--s-font-display)',
             background: 'linear-gradient(90deg, var(--s-green), var(--s-cyan))',
             WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
-          }}>Datenschutz</span>
+          }}>{t('settings.privacy.title')}</span>
           <span style={{
             fontSize: '0.55rem', fontWeight: 700, padding: '2px 8px', borderRadius: 6,
             background: 'rgba(61,255,143,0.08)', border: '1px solid rgba(61,255,143,0.15)',
@@ -505,10 +513,10 @@ const SettingsPage: React.FC = () => {
           <div className="s-section-divider" />
 
           {/* Data Deletion — Art. 17 DSGVO */}
-          <div style={{ fontSize: '0.7rem', color: 'var(--s-text-dim)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Recht auf Löschung (Art. 17 DSGVO)</div>
+          <div style={{ fontSize: '0.7rem', color: 'var(--s-text-dim)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{t('dsgvo.rightToErasure')}</div>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
             <button className="s-btn s-btn-danger s-btn-sm" style={{ borderRadius: 8 }} onClick={handleClearLog}>
-              Activity Log löschen
+              {t('settings.privacy.clearActivityLog')}
             </button>
             <button className="s-btn s-btn-danger s-btn-sm" style={{ borderRadius: 8 }} disabled={threatClearing} onClick={async () => {
               setThreatClearing(true);
@@ -519,7 +527,7 @@ const SettingsPage: React.FC = () => {
               } catch (e: any) { notify.error(e?.message || 'Fehler'); }
               setThreatClearing(false);
             }}>
-              {threatClearing ? 'Lösche...' : 'Threat-Events löschen'}
+              {threatClearing ? t('common.loading') : t('settings.privacy.clearThreatEvents')}
             </button>
             <button className="s-btn s-btn-danger s-btn-sm" style={{ borderRadius: 8 }} onClick={async () => {
               try {
@@ -528,7 +536,7 @@ const SettingsPage: React.FC = () => {
                 else notify.error(r?.error || 'Fehler');
               } catch (e: any) { notify.error(e?.message || 'Fehler'); }
             }}>
-              Scan-Historie löschen
+              {t('settings.privacy.clearScanHistory')}
             </button>
           </div>
 
@@ -555,15 +563,15 @@ const SettingsPage: React.FC = () => {
       {/* ─── Activity Log ─── */}
       <motion.div className="s-card-spacy" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} style={{ padding: 0, overflow: 'hidden' }}>
         <div className="s-flex-between" style={{ padding: '14px 18px', borderBottom: '1px solid var(--s-border)' }}>
-          <div className="s-heading-sm">Activity Log ({activity.length})</div>
+          <div className="s-heading-sm">{t('dashboard.activityFeed')} ({activity.length})</div>
           <div style={{ display: 'flex', gap: 8 }}>
-            <button className="s-btn s-btn-ghost s-btn-sm" onClick={fetchData}>Refresh</button>
-            <button className="s-btn s-btn-danger s-btn-sm" onClick={handleClearLog}>Clear</button>
+            <button className="s-btn s-btn-ghost s-btn-sm" onClick={fetchData}>{t('common.refresh')}</button>
+            <button className="s-btn s-btn-danger s-btn-sm" onClick={handleClearLog}>{t('common.clear')}</button>
           </div>
         </div>
         <div style={{ maxHeight: 400, overflowY: 'auto' }}>
           {activity.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: 40, color: 'var(--s-text-dim)' }}>No activity logged</div>
+            <div style={{ textAlign: 'center', padding: 40, color: 'var(--s-text-dim)' }}>{t('common.noData')}</div>
           ) : activity.map((entry, i) => (
             <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '8px 18px', borderBottom: '1px solid rgba(109,120,255,0.06)' }}>
               <div style={{

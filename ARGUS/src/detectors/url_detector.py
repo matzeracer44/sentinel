@@ -90,10 +90,14 @@ class URLDetector:
             re.compile(kw, re.IGNORECASE) for kw in config.get('phishing_keywords', [
                 'login', 'signin', 'verify', 'account', 'secure', 'update',
                 'confirm', 'password', 'credential', 'suspend', 'unusual',
-                'authenticate', 'wallet', 'banking', 'paypal', 'ebay',
-                'amazon', 'microsoft', 'apple', 'google', 'facebook',
+                'authenticate', 'wallet', 'banking',
                 'unlock', 'expire',
             ])
+        ]
+        # Brand names checked ONLY for subdomain impersonation, not as path keywords
+        self.brand_names = [
+            'paypal', 'ebay', 'amazon', 'microsoft', 'apple',
+            'google', 'facebook', 'netflix', 'bank',
         ]
         self.max_url_length = config.get('max_url_length', 2048)
 
@@ -113,12 +117,13 @@ class URLDetector:
         url_fetch_cfg = config.get('url_fetch', {})
         self._safety = get_safety_guard(config=url_fetch_cfg)
 
-        # Sandbox isolation layer — env-controlled, defaults to true if unset
+        # Sandbox isolation layer — DISABLED by default (LIVE mode)
+        # Set ARGUS_SANDBOX_MODE=true in .env to enable sandbox for testing only
         import os
         sandbox_cfg = config.get('sandbox', {})
-        sandbox_val = sandbox_cfg.get('enabled', '${ARGUS_SANDBOX_MODE}')
+        sandbox_val = sandbox_cfg.get('enabled', False)
         if isinstance(sandbox_val, str) and sandbox_val.startswith('${'):
-            sandbox_val = os.environ.get(sandbox_val[2:-1], 'true')
+            sandbox_val = os.environ.get(sandbox_val[2:-1], 'false')
         self.sandbox = IsolationProvider(
             enabled=str(sandbox_val).lower() in ('true', '1', 'yes'))
 
@@ -158,6 +163,23 @@ class URLDetector:
         )
         logger.info('Network layer initialised (session + threat intel APIs)')
 
+    def close_sessions(self):
+        """Close all HTTP sessions to prevent CloseWait TCP connection pile-up.
+        Called after each scan or on ARGUS shutdown."""
+        if self._session:
+            try:
+                self._session.close()
+            except Exception:
+                pass
+            self._session = None
+        if self.threat_intel:
+            try:
+                self.threat_intel.close_sessions()
+            except Exception:
+                pass
+            self.threat_intel = None
+        logger.debug('All network sessions closed')
+
     # ------------------------------------------------------------------
     # PUBLIC API
     # ------------------------------------------------------------------
@@ -175,8 +197,17 @@ class URLDetector:
         # e.g. "www.google.com" -> "http://www.google.com"
         return 'http://' + url
 
-    def analyze_url(self, url: str) -> Dict:
-        """Full OSINT analysis of a URL — returns rich intelligence data."""
+    def analyze_url(self, url: str, deep_fetch: bool = False) -> Dict:
+        """Full OSINT analysis of a URL — returns rich intelligence data.
+
+        Two-tier scanning:
+          deep_fetch=False (default): Passive analysis only — DNS, WHOIS, SSL cert
+              inspection, GeoIP, threat intel APIs, domain heuristics. The target URL
+              is NEVER fetched. Safe for any link including suspicious ones.
+          deep_fetch=True: Full analysis — also fetches HTTP content, follows
+              redirect chains, performs content analysis. Only use when the user
+              explicitly consents (e.g. after reviewing passive results).
+        """
         if not url or not isinstance(url, str):
             return self._create_result(url, URLThreatLevel.UNKNOWN, "Invalid URL format")
 
@@ -235,10 +266,10 @@ class URLDetector:
             if self._homograph_detection:
                 threat_score += self._check_homograph(domain, reasons)
 
-            # --- Phase 2: Deep OSINT (always run for maximum intel) ---
-            intel = self._gather_intelligence(url, domain, parsed)
+            # --- Phase 2: Intelligence gathering ---
+            intel = self._gather_intelligence(url, domain, parsed, deep_fetch=deep_fetch)
 
-            # --- KILLSWITCH: instant CRITICAL if sandbox blocked this URL ---
+            # --- KILLSWITCH: instant CRITICAL if blocked this URL ---
             ks = intel.get('killswitch')
             if ks:
                 reasons.insert(0, f"KILLSWITCH BLOCKED: {ks.get('reason', 'malicious destination')}")
@@ -267,7 +298,18 @@ class URLDetector:
                 'reasons': reasons,
                 'intel': intel,
                 'timestamp': datetime.now(timezone.utc).isoformat(),
+                'deep_fetch': deep_fetch,
             }
+
+            # --- Deep fetch recommendation ---
+            # If passive-only scan and threat_score is elevated, recommend deep fetch
+            if not deep_fetch:
+                recommend, rec_reason = self._should_recommend_deep_fetch(
+                    threat_score, threat_level, intel, domain)
+                result['deep_fetch_available'] = True
+                result['deep_fetch_recommended'] = recommend
+                if rec_reason:
+                    result['deep_fetch_reason'] = rec_reason
 
             # Mark as blocked if CRITICAL (redirect SSRF, malware body, etc.)
             if threat_level == URLThreatLevel.CRITICAL:
@@ -285,11 +327,74 @@ class URLDetector:
             logger.exception("Analysis error for %s", url)
             return self._create_result(url, URLThreatLevel.UNKNOWN, f"Analysis error: {str(e)}")
 
-    def batch_analyze(self, urls: List[str]) -> List[Dict]:
+    def _should_recommend_deep_fetch(self, threat_score: int, threat_level: str,
+                                      intel: Dict, domain: str) -> tuple:
+        """Decide whether to recommend a deep fetch (HTTP content analysis).
+        Returns (recommend: bool, reason: str | None)."""
+        # Never recommend deep fetch for CRITICAL — already blocked
+        if threat_level == URLThreatLevel.CRITICAL:
+            return False, None
+
+        # Check for suspicious indicators that warrant deeper analysis
+        reasons = []
+
+        # Young or newly registered domain
+        whois = intel.get('whois', {})
+        if isinstance(whois, dict) and not whois.get('error'):
+            age = whois.get('domain_age_days')
+            if age is not None and age < 90:
+                reasons.append(f'Domain erst {age} Tage alt')
+            if whois.get('newly_registered'):
+                reasons.append('Neu registrierte Domain')
+
+        # Suspicious TLD
+        tld = ('.' + domain.split('.')[-1]) if '.' in domain else ''
+        if tld in self.suspicious_tlds:
+            reasons.append(f'Verdächtige TLD: {tld}')
+
+        # URL shortener detected
+        for pat in self.suspicious_patterns:
+            if pat.search(domain):
+                reasons.append('URL-Shortener erkannt — Ziel unbekannt')
+                break
+
+        # Elevated threat score from passive analysis
+        if threat_score >= 3:
+            reasons.append(f'Erhöhter Risiko-Score ({threat_score}) aus passiver Analyse')
+
+        # SSL issues
+        ssl_data = intel.get('ssl', {})
+        if isinstance(ssl_data, dict):
+            if ssl_data.get('expired'):
+                reasons.append('SSL-Zertifikat abgelaufen')
+            elif ssl_data.get('expiring_soon'):
+                reasons.append('SSL-Zertifikat läuft bald ab')
+            if ssl_data.get('error'):
+                reasons.append('SSL-Verbindung fehlgeschlagen')
+
+        # Domain analysis flags
+        da = intel.get('domain_analysis', {})
+        if isinstance(da, dict):
+            if da.get('typosquatting', {}).get('is_typosquat'):
+                reasons.append(f"Mögliches Typosquatting von {da['typosquatting'].get('target_brand', '?')}")
+            if da.get('typosquatting', {}).get('homoglyph_detected'):
+                reasons.append('Homoglyph-Angriff erkannt')
+
+        # Threat intel flags
+        ti = intel.get('threat_intel', {})
+        if isinstance(ti, dict):
+            if ti.get('verdict') in ('suspicious', 'malicious', 'low_risk'):
+                reasons.append(f"Threat-Intel Verdict: {ti['verdict']}")
+
+        if reasons:
+            return True, ' | '.join(reasons)
+        return False, None
+
+    def batch_analyze(self, urls: List[str], deep_fetch: bool = False) -> List[Dict]:
         """Analyze multiple URLs in parallel."""
         results = []
         with ThreadPoolExecutor(max_workers=5) as pool:
-            futures = {pool.submit(self.analyze_url, u): u for u in urls}
+            futures = {pool.submit(self.analyze_url, u, deep_fetch): u for u in urls}
             for future in as_completed(futures):
                 results.append(future.result())
         return results
@@ -298,152 +403,124 @@ class URLDetector:
     # INTELLIGENCE GATHERING (Phase 2)
     # ------------------------------------------------------------------
 
-    def _gather_intelligence(self, url: str, domain: str, parsed) -> Dict:
-        """Run all intelligence modules in parallel where possible.
-        When sandbox mode is active, every call is intercepted by the
-        IsolationProvider — no real HTTP traffic leaves the machine."""
+    def _gather_intelligence(self, url: str, domain: str, parsed,
+                              deep_fetch: bool = False) -> Dict:
+        """Two-tier intelligence gathering — REAL data only, no sandbox.
+
+        Tier 1 (passive, always runs — safe for ANY link):
+          DNS, WHOIS, SSL cert inspection, GeoIP, IP WHOIS, Reverse DNS,
+          Threat Intel APIs, Domain Analysis, URL param analysis.
+          These query metadata servers, NOT the target URL itself.
+
+        Tier 2 (active, only when deep_fetch=True — user must consent):
+          HTTP content fetch, redirect chain following, content analysis.
+          These actually connect to and download from the target URL.
+        """
         intel: Dict[str, Any] = {'_input_url': url}
 
-        # ── Sandbox path (zero network I/O) ──
+        # ── Sandbox path (legacy — only if explicitly forced via env) ──
         if self.sandbox.is_active:
-            logger.info('SANDBOX MODE — intercepting all intelligence for %s', url)
+            logger.warning('SANDBOX MODE active — returning simulated data for %s', url)
+            intel['sandbox_active'] = True
             intel['dns'] = self.sandbox.intercept_dns(domain)
             intel['whois'] = self.sandbox.intercept_whois(domain)
-            intel['http'] = self.sandbox.intercept_http(url)
             intel['ssl'] = self.sandbox.intercept_ssl(
                 domain, parsed.port or (443 if parsed.scheme == 'https' else None))
-
             resolved_ips = intel['dns'].get('A', [])
             if resolved_ips:
-                primary_ip = resolved_ips[0]
-                intel['geoip'] = self.sandbox.intercept_geoip(primary_ip)
-                intel['ip_whois'] = self.sandbox.intercept_ip_whois(primary_ip)
-                intel['reverse_dns'] = self.sandbox.intercept_reverse_dns(primary_ip)
+                intel['geoip'] = self.sandbox.intercept_geoip(resolved_ips[0])
                 intel['resolved_ips'] = resolved_ips
-
-            intel['redirect_chain'] = self.sandbox.intercept_redirect_chain(url)
-
-            # ── KILLSWITCH: if redirect chain triggered a block, abort now ──
-            ks = intel['redirect_chain'].get('killswitch')
-            if ks:
-                logger.critical('KILLSWITCH BLOCKED %s — %s', url, ks.get('reason'))
-                intel['killswitch'] = ks
-                intel['final_destination'] = {
-                    'url': ks.get('url', url),
-                    'domain': ks.get('domain', domain),
-                    'risk_score': ks.get('risk_score', 100),
-                    'verdict': 'DANGEROUS',
-                    'color': 'red',
-                    'in_blacklist': True,
-                    'sandbox': True,
-                    'blocked': True,
-                }
-                intel['sandbox_active'] = True
-                return intel
-
             intel['url_params'] = self._intel_url_params(parsed)
-            intel['content_analysis'] = self.sandbox.intercept_content_analysis(url, domain)
-
-            primary_ip = resolved_ips[0] if resolved_ips else None
-            intel['threat_intel'] = self.sandbox.intercept_threat_intel(
-                url, domain, primary_ip)
-
-            # Domain analysis (works offline — no network needed)
             try:
-                whois_data = intel.get('whois') if isinstance(intel.get('whois'), dict) else None
-                intel['domain_analysis'] = self._domain_analyzer.analyze(domain, whois_data)
+                intel['domain_analysis'] = self._domain_analyzer.analyze(domain, intel.get('whois'))
             except Exception as e:
                 intel['domain_analysis'] = {'error': str(e)}
-
-            # Safety card for the final destination
-            final_url = intel['redirect_chain'].get('final_url', url)
-            intel['final_destination'] = verify_final_destination(
-                final_url, sandbox_mode=True)
-
-            intel['sandbox_active'] = True
+            if deep_fetch:
+                intel['http'] = self.sandbox.intercept_http(url)
+                intel['redirect_chain'] = self.sandbox.intercept_redirect_chain(url)
+                intel['content_analysis'] = self.sandbox.intercept_content_analysis(url, domain)
+            intel['final_destination'] = verify_final_destination(url, sandbox_mode=True)
             return intel
 
-        # ── Live path (real network I/O) ──
-        self._init_network()  # lazy init — creates session + threat intel on first live scan
+        # ══════════════════════════════════════════════════════════════════
+        # LIVE PATH — real network I/O, real data
+        # ══════════════════════════════════════════════════════════════════
+        self._init_network()
 
-        # Phase 1: Core intel — all in parallel (DNS, WHOIS, HTTP, SSL, redirect chain)
-        futures = {}
+        # ── Tier 1: Passive intel — all in parallel ──
+        # DNS + WHOIS + SSL cert (connects to port 443 only for cert, no content)
+        tier1_futures = {}
         pool = ThreadPoolExecutor(max_workers=8)
         try:
-            futures = {
+            tier1_futures = {
                 pool.submit(self._intel_dns, domain): 'dns',
                 pool.submit(self._intel_whois, domain): 'whois',
-                pool.submit(self._intel_http, url): 'http',
-                pool.submit(self._intel_ssl, domain, parsed.port or (443 if parsed.scheme == 'https' else None)): 'ssl',
-                pool.submit(self._intel_redirect_chain, url): 'redirect_chain',
+                pool.submit(self._intel_ssl, domain,
+                            parsed.port or (443 if parsed.scheme == 'https' else None)): 'ssl',
             }
+            # If deep_fetch, also launch HTTP + redirect chain in parallel
+            if deep_fetch:
+                tier1_futures[pool.submit(self._intel_http, url)] = 'http'
+                tier1_futures[pool.submit(self._intel_redirect_chain, url)] = 'redirect_chain'
+
             try:
-                for future in as_completed(futures, timeout=20):
-                    key = futures[future]
+                for future in as_completed(tier1_futures, timeout=20):
+                    key = tier1_futures[future]
                     try:
                         intel[key] = future.result()
                     except Exception as e:
                         intel[key] = {'error': str(e)}
             except TimeoutError:
-                logger.warning('Phase 1 timed out after 20s — continuing with partial results')
+                logger.warning('Tier 1 timed out after 20s — continuing with partial results')
         finally:
             pool.shutdown(wait=False)
 
-        for future, key in futures.items():
+        for future, key in tier1_futures.items():
             if key not in intel:
                 intel[key] = {'error': 'Timed out'}
 
-        # Phase 2: IP-dependent intel + threat intel — all in parallel
+        # ── Tier 1b: IP-dependent intel + Threat Intel APIs ──
         resolved_ips = []
         dns_data = intel.get('dns', {})
         if isinstance(dns_data, dict):
             resolved_ips = dns_data.get('A', []) + dns_data.get('AAAA', [])
 
-        phase2_futures = {}
+        tier1b_futures = {}
         pool2 = ThreadPoolExecutor(max_workers=6)
         try:
             if resolved_ips:
                 primary_ip = resolved_ips[0]
-                phase2_futures[pool2.submit(self._intel_geoip, primary_ip)] = 'geoip'
-                phase2_futures[pool2.submit(self._intel_ip_whois, primary_ip)] = 'ip_whois'
-                phase2_futures[pool2.submit(self._intel_reverse_dns, primary_ip)] = 'reverse_dns'
+                tier1b_futures[pool2.submit(self._intel_geoip, primary_ip)] = 'geoip'
+                tier1b_futures[pool2.submit(self._intel_ip_whois, primary_ip)] = 'ip_whois'
+                tier1b_futures[pool2.submit(self._intel_reverse_dns, primary_ip)] = 'reverse_dns'
                 intel['resolved_ips'] = resolved_ips
             else:
                 primary_ip = None
 
             if self._threat_intel_enabled and self.threat_intel:
-                phase2_futures[pool2.submit(
+                tier1b_futures[pool2.submit(
                     self.threat_intel.full_analysis, url, domain, primary_ip
                 )] = 'threat_intel'
 
-            if phase2_futures:
+            if tier1b_futures:
                 try:
-                    for future in as_completed(phase2_futures, timeout=15):
-                        key = phase2_futures[future]
+                    for future in as_completed(tier1b_futures, timeout=15):
+                        key = tier1b_futures[future]
                         try:
                             intel[key] = future.result()
                         except Exception as e:
                             intel[key] = {'error': str(e)}
                 except TimeoutError:
-                    logger.warning('Phase 2 timed out after 15s — continuing with partial results')
+                    logger.warning('Tier 1b timed out after 15s — continuing with partial')
         finally:
             pool2.shutdown(wait=False)
 
-        for future, key in phase2_futures.items():
+        for future, key in tier1b_futures.items():
             if key not in intel:
                 intel[key] = {'error': 'Timed out'}
 
-        # Phase 3: Offline analysis (instant — no network)
+        # ── Offline analysis (instant — zero network) ──
         intel['url_params'] = self._intel_url_params(parsed)
-
-        http_data = intel.get('http', {})
-        if isinstance(http_data, dict) and not http_data.get('error'):
-            try:
-                body = http_data.get('_body_snippet', '')
-                if body:
-                    intel['content_analysis'] = self._content_analyzer.analyze(body, url)
-            except Exception as e:
-                intel['content_analysis'] = {'error': str(e)}
 
         try:
             whois_data = intel.get('whois') if isinstance(intel.get('whois'), dict) else None
@@ -451,13 +528,28 @@ class URLDetector:
         except Exception as e:
             intel['domain_analysis'] = {'error': str(e)}
 
-        # Safety card for the final destination
-        redir = intel.get('redirect_chain', {})
-        final_url = redir.get('final_url', url)
-        intel['final_destination'] = verify_final_destination(
-            final_url, sandbox_mode=False)
+        # ── Tier 2 post-processing (only if deep_fetch was requested) ──
+        if deep_fetch:
+            http_data = intel.get('http', {})
+            if isinstance(http_data, dict) and not http_data.get('error'):
+                try:
+                    body = http_data.get('_body_snippet', '')
+                    if body:
+                        intel['content_analysis'] = self._content_analyzer.analyze(body, url)
+                except Exception as e:
+                    intel['content_analysis'] = {'error': str(e)}
+
+            redir = intel.get('redirect_chain', {})
+            final_url = redir.get('final_url', url)
+            intel['final_destination'] = verify_final_destination(
+                final_url, sandbox_mode=False)
+        else:
+            # Passive mode: final destination = input URL (no redirect following)
+            intel['final_destination'] = verify_final_destination(
+                url, sandbox_mode=False)
 
         intel['sandbox_active'] = False
+        intel['scan_mode'] = 'deep' if deep_fetch else 'passive'
         return intel
 
     # --- DNS Intelligence ---
@@ -1156,12 +1248,15 @@ class URLDetector:
             if keyword.search(parsed.path) or keyword.search(parsed.query):
                 reasons.append(f"Phishing keyword in URL path/query: {keyword.pattern}")
                 score += 1
-        # Check for brand impersonation in subdomain
+        # Check for brand impersonation in subdomain (e.g. google.evil.com)
         domain = parsed.netloc.lower()
-        brands = ['paypal', 'apple', 'google', 'microsoft', 'amazon', 'facebook', 'netflix', 'bank']
-        for brand in brands:
+        for brand in self.brand_names:
             parts = domain.split('.')
-            if len(parts) > 2 and brand in '.'.join(parts[:-2]) and brand not in '.'.join(parts[-2:]):
+            main_domain = '.'.join(parts[-2:]) if len(parts) >= 2 else domain
+            subdomains = '.'.join(parts[:-2]) if len(parts) > 2 else ''
+            # Only flag if brand is in subdomain but NOT in the main domain
+            # e.g. google.evil.com is suspicious, but mail.google.com is NOT
+            if subdomains and brand in subdomains and brand not in main_domain:
                 reasons.append(f"Possible brand impersonation: '{brand}' in subdomain but not main domain")
                 score += 4
         return score
@@ -1317,9 +1412,8 @@ class URLDetector:
             if geo_data.get('is_proxy'):
                 reasons.append("IP is flagged as a proxy/VPN")
                 score += 2
-            if geo_data.get('is_hosting'):
-                reasons.append("IP belongs to a hosting/datacenter provider")
-                score += 1
+            # NOTE: is_hosting is NOT penalised — major legitimate sites
+            # (Google, Cloudflare, AWS) are all hosting providers
 
         # Redirect chain scoring (from dedicated redirect chain intel)
         redir_data = intel.get('redirect_chain', {})
@@ -1481,15 +1575,13 @@ class URLDetector:
     # ------------------------------------------------------------------
 
     def _determine_threat_level(self, score: int) -> str:
-        if score >= 15:
+        if score >= 20:
             return URLThreatLevel.CRITICAL
-        elif score >= 10:
+        elif score >= 14:
             return URLThreatLevel.MALICIOUS
-        elif score >= 5:
+        elif score >= 8:
             return URLThreatLevel.SUSPICIOUS
-        elif score >= 2:
-            return URLThreatLevel.LOW
-        elif score >= 1:
+        elif score >= 3:
             return URLThreatLevel.LOW
         else:
             return URLThreatLevel.SAFE

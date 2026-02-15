@@ -207,6 +207,7 @@ const electronAPI = {
     selfTest: () => ipcRenderer.invoke('shield-self-test'),
 
     // Deep System Scans (101 checks across 5 modules)
+    setScanLanguage: (lang: string) => ipcRenderer.invoke('sentinel-set-scan-language', lang),
     fullScan: () => ipcRenderer.invoke('sentinel-full-scan'),
     kernelScan: () => ipcRenderer.invoke('sentinel-kernel-scan'),
     edrScan: () => ipcRenderer.invoke('sentinel-edr-scan'),
@@ -403,8 +404,8 @@ const electronAPI = {
   // ARGUS Python Backend Bridge
   argus: {
     // Threat Intelligence
-    scanUrl: (url: string) => ipcRenderer.invoke('intel-url-scan', url),
-    batchScan: (urls: string[]) => ipcRenderer.invoke('intel-batch-scan', urls),
+    scanUrl: (url: string, deepFetch?: boolean) => ipcRenderer.invoke('intel-url-scan', deepFetch ? { url, deepFetch } : url),
+    batchScan: (urls: string[], deepFetch?: boolean) => ipcRenderer.invoke('intel-batch-scan', deepFetch ? { urls, deepFetch } : urls),
     getScanHistory: (limit?: number, offset?: number) =>
       ipcRenderer.invoke('intel-scan-history', limit, offset),
     exportHistory: () => ipcRenderer.invoke('intel-export-history'),
@@ -479,6 +480,11 @@ const electronAPI = {
       const wrapped = (_event: Electron.IpcRendererEvent, data: any) => cb(data);
       ipcRenderer.on('sentinel-scan-complete', wrapped);
       return () => ipcRenderer.removeListener('sentinel-scan-complete', wrapped);
+    },
+    onScanProgress: (cb: (data: { phase: string; elapsed: number }) => void) => {
+      const wrapped = (_event: Electron.IpcRendererEvent, data: any) => cb(data);
+      ipcRenderer.on('sentinel-scan-progress', wrapped);
+      return () => ipcRenderer.removeListener('sentinel-scan-progress', wrapped);
     },
     onActivityLogAppended: (cb: (entry: any) => void) => {
       const wrapped = (_event: Electron.IpcRendererEvent, entry: any) => cb(entry);
@@ -799,8 +805,8 @@ export interface ElectronAPI {
 }
 
 export interface ArgusAPI {
-  scanUrl: (url: string) => Promise<{ success: boolean; data?: unknown; error?: string }>;
-  batchScan: (urls: string[]) => Promise<{ success: boolean; data?: unknown; error?: string }>;
+  scanUrl: (url: string, deepFetch?: boolean) => Promise<{ success: boolean; data?: unknown; error?: string }>;
+  batchScan: (urls: string[], deepFetch?: boolean) => Promise<{ success: boolean; data?: unknown; error?: string }>;
   getScanHistory: (limit?: number, offset?: number) => Promise<{ success: boolean; data?: unknown; error?: string }>;
   exportHistory: () => Promise<{ success: boolean; data?: unknown; error?: string }>;
   clearHistory: () => Promise<{ success: boolean; data?: unknown; error?: string }>;

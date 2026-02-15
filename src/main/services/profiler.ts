@@ -29,7 +29,7 @@ export class Profiler extends EventEmitter {
   private getProfileDir(): string {
     if (!this.dir) {
       this.dir = path.join(app.getPath('userData'), 'profiles');
-      try { fs.mkdirSync(this.dir, { recursive: true }); } catch (e) {}
+      try { fs.mkdirSync(this.dir, { recursive: true }); } catch { /* dir may already exist */ }
     }
     return this.dir;
   }
@@ -184,8 +184,8 @@ export class Profiler extends EventEmitter {
   }
 
   public dispose() {
-    try { if (this.checkerTimer) clearInterval(this.checkerTimer); } catch (e) {}
-    try { this.monitor.disable(); } catch (e) {}
+    try { if (this.checkerTimer) clearInterval(this.checkerTimer); } catch { /* timer may already be cleared */ }
+    try { this.monitor.disable(); } catch { /* monitor may already be disabled */ }
   }
 }
 
