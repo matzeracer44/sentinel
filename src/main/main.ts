@@ -1528,7 +1528,7 @@ ipcMain.handle('sentinel-kernel-scan', async () => {
     emitAudit('kernel', 'scan-start', 'Kernel & Firmware Integrity scan started', 'info');
     const { enrichChecks } = await import('./services/scanners/mergeCheckDetails');
     const checks = enrichChecks(await runAllKernelChecks());
-    checks.forEach((c: any) => emitAudit('kernel', 'check', `${c.status === 'pass' ? '\u2713' : c.status === 'warn' ? '\u26a0' : '\u2715'} ${c.name}`, c.status === 'pass' ? 'success' : c.status === 'warn' ? 'warning' : 'error', { checkId: c.id, status: c.status, detail: c.richDetail?.whatFound || c.detail || '' }));
+    checks.forEach((c: any) => emitAudit('kernel', 'check', `${c.status === 'pass' ? '\u2713' : c.status === 'warn' ? '\u26a0' : '\u2715'} ${c.name}`, c.status === 'pass' ? 'success' : c.status === 'warn' ? 'warning' : 'error', { checkId: c.id, status: c.status, detail: c.detail || '', offenders: c.offenders?.length || 0 }));
     const passed = checks.filter((c: any) => c.status === 'pass').length;
     const score = Math.round((passed / checks.length) * 100);
     emitAudit('kernel', 'scan-done', `Kernel scan complete: ${passed}/${checks.length} passed (${score}%)`, score >= 80 ? 'success' : 'warning');
@@ -1541,7 +1541,7 @@ ipcMain.handle('sentinel-edr-scan', async () => {
     emitAudit('edr', 'scan-start', 'EDR & Behavioral Engine scan started', 'info');
     const { enrichChecks } = await import('./services/scanners/mergeCheckDetails');
     const checks = enrichChecks(await runAllEdrChecks());
-    checks.forEach((c: any) => emitAudit('edr', 'check', `${c.status === 'pass' ? '\u2713' : c.status === 'warn' ? '\u26a0' : '\u2715'} ${c.name}`, c.status === 'pass' ? 'success' : c.status === 'warn' ? 'warning' : 'error', { checkId: c.id, status: c.status, detail: c.richDetail?.whatFound || c.detail || '' }));
+    checks.forEach((c: any) => emitAudit('edr', 'check', `${c.status === 'pass' ? '\u2713' : c.status === 'warn' ? '\u26a0' : '\u2715'} ${c.name}`, c.status === 'pass' ? 'success' : c.status === 'warn' ? 'warning' : 'error', { checkId: c.id, status: c.status, detail: c.detail || '', offenders: c.offenders?.length || 0 }));
     const passed = checks.filter((c: any) => c.status === 'pass').length;
     const score = Math.round((passed / checks.length) * 100);
     emitAudit('edr', 'scan-done', `EDR scan complete: ${passed}/${checks.length} passed (${score}%)`, score >= 80 ? 'success' : 'warning');
@@ -1554,7 +1554,7 @@ ipcMain.handle('sentinel-network-scan', async () => {
     emitAudit('network', 'scan-start', 'Network & WFP Firewall scan started', 'info');
     const { enrichChecks } = await import('./services/scanners/mergeCheckDetails');
     const checks = enrichChecks(await runAllNetworkChecks());
-    checks.forEach((c: any) => emitAudit('network', 'check', `${c.status === 'pass' ? '\u2713' : c.status === 'warn' ? '\u26a0' : '\u2715'} ${c.name}`, c.status === 'pass' ? 'success' : c.status === 'warn' ? 'warning' : 'error', { checkId: c.id, status: c.status, detail: c.richDetail?.whatFound || c.detail || '' }));
+    checks.forEach((c: any) => emitAudit('network', 'check', `${c.status === 'pass' ? '\u2713' : c.status === 'warn' ? '\u26a0' : '\u2715'} ${c.name}`, c.status === 'pass' ? 'success' : c.status === 'warn' ? 'warning' : 'error', { checkId: c.id, status: c.status, detail: c.detail || '', offenders: c.offenders?.length || 0 }));
     const passed = checks.filter((c: any) => c.status === 'pass').length;
     const score = Math.round((passed / checks.length) * 100);
     emitAudit('network', 'scan-done', `Network scan complete: ${passed}/${checks.length} passed (${score}%)`, score >= 80 ? 'success' : 'warning');
@@ -1567,7 +1567,7 @@ ipcMain.handle('sentinel-performance-scan', async () => {
     emitAudit('performance', 'scan-start', 'Performance & Tuning scan started', 'info');
     const { enrichChecks } = await import('./services/scanners/mergeCheckDetails');
     const checks = enrichChecks(await runAllPerformanceChecks());
-    checks.forEach((c: any) => emitAudit('performance', 'check', `${c.status === 'pass' ? '\u2713' : c.status === 'warn' ? '\u26a0' : '\u2715'} ${c.name}`, c.status === 'pass' ? 'success' : c.status === 'warn' ? 'warning' : 'error', { checkId: c.id, status: c.status, detail: c.richDetail?.whatFound || c.detail || '' }));
+    checks.forEach((c: any) => emitAudit('performance', 'check', `${c.status === 'pass' ? '\u2713' : c.status === 'warn' ? '\u26a0' : '\u2715'} ${c.name}`, c.status === 'pass' ? 'success' : c.status === 'warn' ? 'warning' : 'error', { checkId: c.id, status: c.status, detail: c.detail || '', offenders: c.offenders?.length || 0 }));
     const passed = checks.filter((c: any) => c.status === 'pass').length;
     const score = Math.round((passed / checks.length) * 100);
     emitAudit('performance', 'scan-done', `Performance scan complete: ${passed}/${checks.length} passed (${score}%)`, score >= 80 ? 'success' : 'warning');
@@ -1580,7 +1580,7 @@ ipcMain.handle('sentinel-privacy-scan', async () => {
     emitAudit('privacy', 'scan-start', 'Privacy & Hardening scan started', 'info');
     const { enrichChecks } = await import('./services/scanners/mergeCheckDetails');
     const checks = enrichChecks(await runAllPrivacyChecks());
-    checks.forEach((c: any) => emitAudit('privacy', 'check', `${c.status === 'pass' ? '\u2713' : c.status === 'warn' ? '\u26a0' : '\u2715'} ${c.name}`, c.status === 'pass' ? 'success' : c.status === 'warn' ? 'warning' : 'error', { checkId: c.id, status: c.status, detail: c.richDetail?.whatFound || c.detail || '' }));
+    checks.forEach((c: any) => emitAudit('privacy', 'check', `${c.status === 'pass' ? '\u2713' : c.status === 'warn' ? '\u26a0' : '\u2715'} ${c.name}`, c.status === 'pass' ? 'success' : c.status === 'warn' ? 'warning' : 'error', { checkId: c.id, status: c.status, detail: c.detail || '', offenders: c.offenders?.length || 0 }));
     const passed = checks.filter((c: any) => c.status === 'pass').length;
     const score = Math.round((passed / checks.length) * 100);
     emitAudit('privacy', 'scan-done', `Privacy scan complete: ${passed}/${checks.length} passed (${score}%)`, score >= 80 ? 'success' : 'warning');
@@ -1603,7 +1603,7 @@ ipcMain.handle('sentinel-full-scan', async () => {
     emitAudit('scan', 'full-scan-start', 'Full Deep Scan started (101 checks across 5 modules)', 'info');
     const { enrichChecks } = await import('./services/scanners/mergeCheckDetails');
     const modScore = (arr: any[]) => { const p = arr.filter((c: any) => c.status === 'pass').length; return { checks: arr, passed: p, total: arr.length, score: Math.round((p / arr.length) * 100) }; };
-    const emitChecks = (mod: string, checks: any[]) => checks.forEach((c: any) => emitAudit(mod, 'check', `${c.status === 'pass' ? '\u2713' : c.status === 'warn' ? '\u26a0' : '\u2715'} ${c.name}`, c.status === 'pass' ? 'success' : c.status === 'warn' ? 'warning' : 'error', { checkId: c.id, status: c.status, detail: c.richDetail?.whatFound || c.detail || '' }));
+    const emitChecks = (mod: string, checks: any[]) => checks.forEach((c: any) => emitAudit(mod, 'check', `${c.status === 'pass' ? '\u2713' : c.status === 'warn' ? '\u26a0' : '\u2715'} ${c.name}`, c.status === 'pass' ? 'success' : c.status === 'warn' ? 'warning' : 'error', { checkId: c.id, status: c.status, detail: c.detail || '', offenders: c.offenders?.length || 0 }));
     const elapsed = () => Date.now() - startTime;
     const timedOut = () => elapsed() >= SCAN_TIMEOUT_MS;
 

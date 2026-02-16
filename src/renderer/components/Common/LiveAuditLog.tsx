@@ -77,17 +77,34 @@ const LiveAuditLog: React.FC<LiveAuditLogProps> = ({ maxHeight = 400, compact = 
     })();
   }, []);
 
-  // Subscribe to real-time events
+  // Subscribe to real-time audit events (scans, fixes, blocks)
   useEffect(() => {
-    const unsub = api()?.notifications?.onAuditEvent?.((evt: AuditEvent) => {
+    const a = api();
+    const addEvt = (evt: AuditEvent) => {
       if (!paused) {
         setEvents(prev => {
           const next = [...prev, evt];
           return next.length > MAX_AUDIT_BUFFER ? next.slice(-MAX_AUDIT_BUFFER) : next;
         });
       }
+    };
+
+    // Channel 1: Scan/fix audit events
+    const unsub1 = a?.notifications?.onAuditEvent?.(addEvt);
+
+    // Channel 2: Live service events (firewall blocks, FIM file changes,
+    // policy scanner, subnet blocks, process kills — everything that calls addActivityLog)
+    const unsub2 = a?.notifications?.onActivityLogAppended?.((entry: any) => {
+      addEvt({
+        ts: entry.timestamp ? new Date(entry.timestamp).getTime() : Date.now(),
+        module: (entry.module || entry.source || 'system').toLowerCase(),
+        action: entry.action || 'event',
+        message: entry.details || entry.message || '',
+        severity: entry.severity || 'info',
+      });
     });
-    return () => unsub?.();
+
+    return () => { unsub1?.(); unsub2?.(); };
   }, [paused]);
 
   // Auto-scroll to bottom
