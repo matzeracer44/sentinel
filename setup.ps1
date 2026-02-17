@@ -47,7 +47,7 @@ function Write-Info($msg) { Write-Host "  $msg" -ForegroundColor Gray }
 Write-Host ""
 Write-Host "  +=============================================+" -ForegroundColor Cyan
 Write-Host "  |         SENTINEL SECURITY SUITE              |" -ForegroundColor Cyan
-Write-Host "  |         Automatisches Setup v3.0              |" -ForegroundColor Cyan
+Write-Host "  |         Automatisches Setup v3.5              |" -ForegroundColor Cyan
 Write-Host "  +=============================================+" -ForegroundColor Cyan
 Write-Host ""
 

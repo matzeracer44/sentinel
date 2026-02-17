@@ -9,6 +9,7 @@
   privacy hardening, and system security — all in one desktop app.
   </p>
 
+  <img src="https://img.shields.io/badge/Version-3.5.0-brightgreen" />
   <img src="https://img.shields.io/badge/Platform-Windows%2010%2F11-blue" />
   <img src="https://img.shields.io/badge/Electron-40-green" />
   <img src="https://img.shields.io/badge/TypeScript-5-blue" />
@@ -27,8 +28,8 @@
 | **Shield / Firewall** | Echtzeit-Regelverwaltung, IP/Port/Subnetz-Blockierung, Undo/Redo | Real-time rule management, IP/port/subnet blocking, undo/redo |
 | **Network Monitor** | Live-Verbindungen, TLS-Inspektion, Prozess-Tracking, Beaconing-Erkennung | Live connections, TLS inspection, process tracking, beaconing detection |
 | **ARGUS AI Sandbox** | URL-Scanning, Bedrohungsklassifizierung, Verhaltensanalyse | URL scanning, threat classification, behavioral analysis |
-| **Threat Intelligence** | Guardian Stories, Anomalie-Erkennung, automatisierte Playbooks | Guardian stories, anomaly detection, automated playbooks |
-| **Vault** | AES-256-GCM-Verschlüsselung, sichere Notizen, Passwort-Generator, Datei-Shredder | AES-256-GCM encryption, secure notes, password generator, file shredder |
+| **Threat Intelligence** | Guardian Stories, Anomalie-Erkennung, automatisierte Playbooks, YARA/IoC-Automation | Guardian stories, anomaly detection, automated playbooks, YARA/IoC automation |
+| **Vault** | AES-256-GCM Datei- & Textverschlüsselung, Drag & Drop, sichere Notizen, Passwort-Generator, Datei-Shredder | AES-256-GCM file & text encryption, drag & drop, secure notes, password generator, file shredder |
 | **Ghost / DNS & Privacy** | DNS-Konfiguration, Hosts-Verwaltung, Telemetrie-Kontrolle | DNS configuration, hosts management, telemetry control |
 | **Forge / System** | Hardware-Diagnose, Performance-Tuning, Health-Scoring | Hardware diagnostics, performance tuning, health scoring |
 | **Security Scans** | 101 Prüfungen in 5 Modulen, 67+ automatische Fixes mit Sicherheitsklassifizierung | 101 checks across 5 modules, 67+ automated fixes with safety classification |
@@ -85,7 +86,7 @@ The setup script:
 - [Python 3.10+](https://www.python.org/) (🇩🇪 für ARGUS AI, optional / 🇬🇧 for ARGUS AI, optional)
 
 ```bash
-git clone https://github.com/YOUR_ALIAS/sentinel.git
+git clone https://github.com/matzeracer44/sentinel.git
 cd sentinel
 npm install
 
