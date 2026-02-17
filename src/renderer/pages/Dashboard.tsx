@@ -7,6 +7,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { notify } from '../components/Common/SentinelNotification';
+import InfoBadge from '../components/Common/InfoBadge';
 import { LegacyScanCheckItem } from '../components/Common/ScanCheckItem';
 import { useTranslation } from 'react-i18next';
 
@@ -103,6 +104,15 @@ const Dashboard: React.FC = () => {
   const [hardeningExpanded, setHardeningExpanded] = useState(false);
   const [vpnStatus, setVpnStatus] = useState<{ active: boolean; provider: string | null; tunnelIP: string | null; protocol: string | null } | null>(null);
   const [argusStatus, setArgusStatus] = useState<{ online: boolean; status: string; pid: number | null; uptimeMs: number; restartAttempts: number; lastError: string | null } | null>(null);
+  const [osopSession, setOsopSession] = useState<{ active: boolean; authenticated: boolean; startedAt?: string } | null>(null);
+  const [threatAuto, setThreatAuto] = useState<{
+    running: boolean;
+    yara: { enabled: boolean; scanning: boolean; lastScan: string | null; nextScan: string | null; filesScanned: number; threatsFound: number; totalScans: number; totalThreats: number };
+    ioc: { enabled: boolean; checking: boolean; lastCheck: string | null; connectionsChecked: number; hitsFound: number; totalChecks: number; totalHits: number };
+    feed: { enabled: boolean; syncing: boolean; lastSync: string | null; nextSync: string | null; ips: number; hashes: number; domains: number };
+    recentYaraHits: Array<{ file: string; rules: string[]; severity: string; ts: string }>;
+    recentIoCHits: Array<{ ip: string; source: string; process: string; ts: string }>;
+  } | null>(null);
 
   const fetchData = useCallback(async () => {
     try {
@@ -172,9 +182,17 @@ const Dashboard: React.FC = () => {
         const a = await api()?.argus?.getStatus?.();
         if (a?.success && a.data) setArgusStatus(a.data);
       } catch (e: any) { console.warn('[Dashboard] ARGUS status:', e?.message); }
+      try {
+        const o = await api()?.osop?.getSession?.();
+        if (o?.success) setOsopSession({ active: !!o.sessionId, authenticated: !!o.authenticated, startedAt: o.startedAt });
+      } catch (e: any) { console.warn('[Dashboard] OSOP status:', e?.message); }
+      try {
+        const ta = await api()?.threatAuto?.getStatus?.();
+        if (ta?.success) setThreatAuto({ running: ta.running, yara: ta.yara, ioc: ta.ioc, feed: ta.feed, recentYaraHits: ta.recentYaraHits || [], recentIoCHits: ta.recentIoCHits || [] });
+      } catch (e: any) { console.warn('[Dashboard] ThreatAuto status:', e?.message); }
     };
     fetchStatus();
-    const interval = setInterval(fetchStatus, 15000);
+    const interval = setInterval(fetchStatus, 10000);
     return () => clearInterval(interval);
   }, []);
 
@@ -239,36 +257,90 @@ const Dashboard: React.FC = () => {
   const scoreColor = healthScore >= 80 ? 'var(--s-green)' : healthScore >= 50 ? 'var(--s-amber)' : 'var(--s-red)';
   const scanScoreColor = (s: number) => s >= 80 ? 'var(--s-green)' : s >= 50 ? 'var(--s-amber)' : 'var(--s-red)';
 
+  const nowDate = new Date();
+  const greeting = nowDate.getHours() < 12 ? 'Guten Morgen' : nowDate.getHours() < 18 ? 'Guten Tag' : 'Guten Abend';
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-      {/* ─── Hero: Health Score + System Stats ─── */}
-      <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: 20 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      {/* ═══ Welcome Banner ═══ */}
+      <motion.div
+        className="s-welcome-banner"
+        initial={{ opacity: 0, y: -8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.3 }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <span style={{ fontSize: '1.125rem', fontWeight: 700, fontFamily: 'var(--s-font-display)', background: 'linear-gradient(90deg, var(--s-cyan), var(--s-purple))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
+              {greeting}
+            </span>
+            <span style={{ fontSize: '0.7rem', color: 'var(--s-text-dim)', marginTop: 2 }}>
+              {nowDate.toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })} · {nowDate.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}
+            </span>
+          </div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <span className="s-live-dot" style={{ color: 'var(--s-green)' }}>LIVE</span>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <InfoBadge glossaryKey="DSGVO" />
+            <InfoBadge glossaryKey="OSOP" />
+          </div>
+        </div>
+      </motion.div>
+
+      {/* ═══ Threat Summary Strip ═══ */}
+      <motion.div
+        className="s-threat-strip"
+        initial={{ opacity: 0, y: 6 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.05 }}
+      >
+        {[
+          { label: 'Systemzustand', value: `${healthScore}%`, color: scoreColor, icon: '🛡' },
+          { label: 'CPU', value: `${stats.cpu}%`, color: stats.cpu > 80 ? 'var(--s-red)' : stats.cpu > 50 ? 'var(--s-amber)' : 'var(--s-green)', icon: '⚡' },
+          { label: 'Speicher', value: `${stats.ram}%`, color: stats.ram > 80 ? 'var(--s-red)' : stats.ram > 50 ? 'var(--s-amber)' : 'var(--s-green)', icon: '◈' },
+          { label: 'Festplatte', value: `${stats.disk}%`, color: stats.disk > 80 ? 'var(--s-red)' : stats.disk > 50 ? 'var(--s-amber)' : 'var(--s-green)', icon: '◉' },
+          { label: 'VPN', value: vpnStatus?.active ? 'Aktiv' : 'Aus', color: vpnStatus?.active ? 'var(--s-green)' : 'var(--s-red)', icon: '🔐' },
+          { label: 'ARGUS', value: argusStatus?.online ? 'Online' : 'Offline', color: argusStatus?.online ? 'var(--s-green)' : 'var(--s-red)', icon: '🧠' },
+        ].map((item) => (
+          <div key={item.label} className="s-threat-strip-item">
+            <span style={{ fontSize: '1rem' }}>{item.icon}</span>
+            <div>
+              <div style={{ fontSize: '0.95rem', fontWeight: 800, fontFamily: 'var(--s-font-display)', color: item.color, lineHeight: 1 }}>
+                {item.value}
+              </div>
+              <div style={{ fontSize: '0.575rem', color: 'var(--s-text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em', marginTop: 2 }}>
+                {item.label}
+              </div>
+            </div>
+          </div>
+        ))}
+      </motion.div>
+
+      {/* ═══ Hero: Score Ring + System Stats + Status ═══ */}
+      <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 20 }}>
         {/* Health Score Ring — Premium animated */}
         <motion.div
-          className="s-card-spacy"
+          className="s-hero-glass"
           initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
           transition={{ duration: 0.4, ease: 'easeOut' }}
           onClick={() => setHealthDetailOpen(true)}
           style={{
             display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-            padding: 28, position: 'relative', cursor: 'pointer',
-            background: 'linear-gradient(145deg, rgba(15,15,50,0.7), rgba(8,8,28,0.95))',
+            cursor: 'pointer',
           }}
-          whileHover={{ boxShadow: `0 0 30px ${scoreColor}18` }}
+          whileHover={{ boxShadow: `0 0 40px ${scoreColor}15, 0 0 80px ${scoreColor}08` }}
         >
           {/* Ambient glow behind ring */}
           <div style={{
-            position: 'absolute', width: 180, height: 180, borderRadius: '50%',
-            background: `radial-gradient(circle, ${scoreColor}15, transparent 70%)`,
-            filter: 'blur(20px)', pointerEvents: 'none',
+            position: 'absolute', width: 160, height: 160, borderRadius: '50%',
+            background: `radial-gradient(circle, ${scoreColor}18, transparent 70%)`,
+            filter: 'blur(24px)', pointerEvents: 'none',
           }} />
-          <svg width="170" height="170" viewBox="0 0 170 170" style={{ filter: `drop-shadow(0 0 16px ${scoreColor}66)`, position: 'relative', zIndex: 1 }}>
-            {/* Outer glow ring */}
-            <circle cx="85" cy="85" r="74" fill="none" stroke={`${scoreColor}08`} strokeWidth="14" />
-            {/* Track */}
-            <circle cx="85" cy="85" r="68" fill="none" stroke="rgba(109,120,255,0.08)" strokeWidth="7" />
-            {/* Score arc */}
+          <svg width="150" height="150" viewBox="0 0 170 170" style={{ filter: `drop-shadow(0 0 12px ${scoreColor}55)`, position: 'relative', zIndex: 1 }}>
+            <circle cx="85" cy="85" r="74" fill="none" stroke={`${scoreColor}06`} strokeWidth="14" />
+            <circle cx="85" cy="85" r="68" fill="none" stroke="rgba(109,120,255,0.06)" strokeWidth="7" />
             <circle
               cx="85" cy="85" r="68" fill="none"
               stroke="url(#scoreGradient)" strokeWidth="7" strokeLinecap="round"
@@ -276,18 +348,17 @@ const Dashboard: React.FC = () => {
               transform="rotate(-90 85 85)"
               style={{ transition: 'stroke-dasharray 1.2s cubic-bezier(0.4,0,0.2,1)' }}
             />
-            {/* Inner glow arc */}
             <circle
               cx="85" cy="85" r="68" fill="none"
               stroke={scoreColor} strokeWidth="2" strokeLinecap="round"
               strokeDasharray={`${(healthScore / 100) * 427} 427`}
               transform="rotate(-90 85 85)"
-              style={{ transition: 'stroke-dasharray 1.2s cubic-bezier(0.4,0,0.2,1)', filter: `blur(4px)`, opacity: 0.6 }}
+              style={{ transition: 'stroke-dasharray 1.2s cubic-bezier(0.4,0,0.2,1)', filter: 'blur(4px)', opacity: 0.5 }}
             />
             <defs>
               <linearGradient id="scoreGradient" x1="0" y1="0" x2="1" y2="1">
                 <stop offset="0%" stopColor={scoreColor} />
-                <stop offset="100%" stopColor={scoreColor} stopOpacity="0.5" />
+                <stop offset="100%" stopColor={scoreColor} stopOpacity="0.4" />
               </linearGradient>
             </defs>
           </svg>
@@ -298,23 +369,24 @@ const Dashboard: React.FC = () => {
               animate={{ scale: 1, opacity: 1 }}
               transition={{ duration: 0.5, ease: 'easeOut' }}
               style={{
-                fontSize: '2.75rem', fontWeight: 800, fontFamily: 'var(--s-font-display)',
+                fontSize: '2.5rem', fontWeight: 800, fontFamily: 'var(--s-font-display)',
                 color: scoreColor, lineHeight: 1,
-                textShadow: `0 0 30px ${scoreColor}44`,
+                textShadow: `0 0 24px ${scoreColor}44`,
               }}
             >
               {healthScore}
             </motion.div>
             <div style={{
-              fontSize: '0.625rem', color: 'var(--s-text-dim)', marginTop: 6,
+              fontSize: '0.575rem', color: 'var(--s-text-dim)', marginTop: 4,
               textTransform: 'uppercase', letterSpacing: '0.12em', fontWeight: 600,
             }}>
               {t('dashboard.healthScore')}
             </div>
           </div>
+          {/* Status pill under ring */}
           <div style={{
-            marginTop: 18, fontSize: '0.75rem', color: 'var(--s-text-secondary)', textAlign: 'center',
-            padding: '6px 16px', borderRadius: 20,
+            marginTop: 14, fontSize: '0.7rem', color: 'var(--s-text-secondary)', textAlign: 'center',
+            padding: '5px 14px', borderRadius: 20,
             background: `${scoreColor}08`, border: `1px solid ${scoreColor}18`,
           }}>
             {healthScore >= 80 ? `● ${t('nav.systemProtected')}` : healthScore >= 50 ? `◐ ${t('common.warning')}` : `○ ${t('common.critical')}`}
@@ -325,17 +397,17 @@ const Dashboard: React.FC = () => {
             const perfScore = scanResult.modules.performance?.score || 0;
             const privScore = scanResult.modules.privacy?.score || 0;
             return (
-              <div style={{ display: 'flex', gap: 16, marginTop: 12 }}>
+              <div style={{ display: 'flex', gap: 14, marginTop: 10 }}>
                 {[
-                  { label: 'Security', value: secScore },
-                  { label: 'Performance', value: perfScore },
-                  { label: 'Privacy', value: privScore },
+                  { label: 'Sicherheit', value: secScore },
+                  { label: 'Leistung', value: perfScore },
+                  { label: 'Datenschutz', value: privScore },
                 ].map(sub => (
                   <div key={sub.label} style={{ textAlign: 'center' }}>
-                    <div style={{ fontSize: '1rem', fontWeight: 700, fontFamily: 'var(--s-font-display)', color: scanScoreColor(sub.value) }}>
+                    <div style={{ fontSize: '0.9375rem', fontWeight: 700, fontFamily: 'var(--s-font-display)', color: scanScoreColor(sub.value) }}>
                       {sub.value}
                     </div>
-                    <div style={{ fontSize: '0.5rem', color: 'var(--s-text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                    <div style={{ fontSize: '0.475rem', color: 'var(--s-text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
                       {sub.label}
                     </div>
                   </div>
@@ -343,65 +415,250 @@ const Dashboard: React.FC = () => {
               </div>
             );
           })()}
+          <div style={{ fontSize: '0.575rem', color: 'var(--s-text-dim)', marginTop: 8, opacity: 0.7 }}>
+            {'Klicken f\u00fcr Details'}
+          </div>
         </motion.div>
 
-        {/* System Stats Grid */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
-          {[
-            { label: 'CPU', value: stats.cpu, unit: '%', color: stats.cpu > 80 ? 'var(--s-red)' : stats.cpu > 50 ? 'var(--s-amber)' : 'var(--s-cyan)', icon: '⚡' },
-            { label: 'Memory', value: stats.ram, unit: '%', color: stats.ram > 80 ? 'var(--s-red)' : stats.ram > 50 ? 'var(--s-amber)' : 'var(--s-cyan)', icon: '◈' },
-            { label: 'Disk', value: stats.disk, unit: '%', color: stats.disk > 80 ? 'var(--s-red)' : stats.disk > 50 ? 'var(--s-amber)' : 'var(--s-cyan)', icon: '◉' },
-          ].map((stat, i) => (
-            <motion.div
-              key={stat.label}
-              className="s-card-spacy"
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.1 + i * 0.06 }}
-              style={{
-                display: 'flex', flexDirection: 'column', justifyContent: 'space-between',
-                borderTop: `2px solid ${stat.color}44`,
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
-                <span style={{ fontSize: '0.7rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--s-text-muted)' }}>
-                  {stat.icon} {stat.label}
-                </span>
-                <span style={{
-                  fontSize: '0.6rem', padding: '2px 6px', borderRadius: 8,
-                  background: `${stat.color}12`, color: stat.color,
-                  fontWeight: 700, fontFamily: 'var(--s-font-mono)',
-                }}>
-                  {stat.value > 80 ? 'HIGH' : stat.value > 50 ? 'MED' : 'LOW'}
-                </span>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: 4 }}>
-                <motion.span
-                  key={stat.value}
-                  initial={{ opacity: 0.5, y: 4 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  style={{
-                    fontSize: '2.25rem', fontWeight: 800, fontFamily: 'var(--s-font-display)',
-                    color: stat.color, lineHeight: 1,
-                    textShadow: `0 0 20px ${stat.color}33`,
-                  }}
-                >
-                  {stat.value}
-                </motion.span>
-                <span style={{ fontSize: '0.875rem', color: 'var(--s-text-dim)', fontWeight: 500 }}>{stat.unit}</span>
-              </div>
-              <div className="s-progress-bar" style={{ marginTop: 14, height: 5, borderRadius: 3 }}>
-                <div
-                  className="s-progress-fill"
-                  style={{
+        {/* Right Column: System Stats + Status Grid */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {/* System Stats Row */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+            {[
+              { label: 'CPU', value: stats.cpu, unit: '%', color: stats.cpu > 80 ? 'var(--s-red)' : stats.cpu > 50 ? 'var(--s-amber)' : 'var(--s-cyan)', icon: '⚡' },
+              { label: 'Speicher', value: stats.ram, unit: '%', color: stats.ram > 80 ? 'var(--s-red)' : stats.ram > 50 ? 'var(--s-amber)' : 'var(--s-cyan)', icon: '◈' },
+              { label: 'Festplatte', value: stats.disk, unit: '%', color: stats.disk > 80 ? 'var(--s-red)' : stats.disk > 50 ? 'var(--s-amber)' : 'var(--s-cyan)', icon: '◉' },
+            ].map((stat, i) => (
+              <motion.div
+                key={stat.label}
+                className="s-card-compact-spacy"
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.08 + i * 0.04 }}
+                style={{ borderTop: `2px solid ${stat.color}33` }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                  <span style={{ fontSize: '0.65rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--s-text-muted)' }}>
+                    {stat.icon} {stat.label}
+                  </span>
+                  <span style={{
+                    fontSize: '0.55rem', padding: '1px 5px', borderRadius: 6,
+                    background: `${stat.color}10`, color: stat.color,
+                    fontWeight: 700, fontFamily: 'var(--s-font-mono)',
+                  }}>
+                    {stat.value > 80 ? 'HOCH' : stat.value > 50 ? 'MITTEL' : 'NORMAL'}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 3 }}>
+                  <motion.span
+                    key={stat.value}
+                    initial={{ opacity: 0.5 }}
+                    animate={{ opacity: 1 }}
+                    style={{
+                      fontSize: '1.75rem', fontWeight: 800, fontFamily: 'var(--s-font-display)',
+                      color: stat.color, lineHeight: 1,
+                      textShadow: `0 0 16px ${stat.color}33`,
+                    }}
+                  >
+                    {stat.value}
+                  </motion.span>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--s-text-dim)', fontWeight: 500 }}>{stat.unit}</span>
+                </div>
+                <div className="s-progress-bar" style={{ marginTop: 10, height: 4, borderRadius: 2 }}>
+                  <div className="s-progress-fill" style={{
                     width: `${stat.value}%`,
                     background: `linear-gradient(90deg, ${stat.color}, ${stat.color}66)`,
-                    boxShadow: `0 0 8px ${stat.color}44`,
-                  }}
-                />
+                    boxShadow: `0 0 6px ${stat.color}33`,
+                  }} />
+                </div>
+              </motion.div>
+            ))}
+          </div>
+
+          {/* Service Status Grid */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10 }}>
+            {/* VPN Status */}
+            <motion.div
+              className="s-card-compact-spacy"
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.22 }}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 12,
+                borderLeft: `3px solid ${vpnStatus?.active ? 'rgba(61,255,143,0.4)' : 'rgba(255,95,95,0.3)'}`,
+              }}
+            >
+              <div style={{
+                width: 36, height: 36, borderRadius: 10,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                background: vpnStatus?.active ? 'rgba(61,255,143,0.08)' : 'rgba(255,95,95,0.08)',
+                fontSize: 16,
+              }}>
+                {vpnStatus?.active ? '🔐' : '⚠'}
               </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 600, fontSize: '0.75rem' }}>
+                  VPN {vpnStatus?.active ? t('dashboard.vpnActive') : t('dashboard.vpnInactive')}
+                </div>
+                <div style={{ fontSize: '0.6rem', color: 'var(--s-text-dim)', marginTop: 1 }} className="s-truncate">
+                  {vpnStatus?.active
+                    ? `${vpnStatus.provider || 'Unknown'} · ${vpnStatus.protocol || ''}`
+                    : t('common.inactive')}
+                </div>
+              </div>
+              <div style={{
+                width: 7, height: 7, borderRadius: '50%',
+                background: vpnStatus?.active ? 'var(--s-green)' : 'var(--s-red)',
+                boxShadow: `0 0 8px ${vpnStatus?.active ? 'var(--s-green)' : 'var(--s-red)'}`,
+                animation: vpnStatus?.active ? 'pulse-green 2s ease-in-out infinite' : 'none',
+              }} />
             </motion.div>
-          ))}
+
+            {/* ARGUS Status */}
+            <motion.div
+              className="s-card-compact-spacy"
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.25 }}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 12,
+                borderLeft: `3px solid ${argusStatus?.online ? 'rgba(61,255,143,0.4)' : 'rgba(255,95,95,0.3)'}`,
+              }}
+            >
+              <div style={{
+                width: 36, height: 36, borderRadius: 10,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                background: argusStatus?.online ? 'rgba(61,255,143,0.08)' : 'rgba(255,95,95,0.08)',
+                fontSize: 16,
+              }}>
+                {argusStatus?.online ? '🧠' : '💀'}
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 600, fontSize: '0.75rem' }}>
+                  ARGUS {argusStatus?.online ? t('intel.argus.online') : t('intel.argus.offline')}
+                </div>
+                <div style={{ fontSize: '0.6rem', color: 'var(--s-text-dim)', marginTop: 1 }} className="s-truncate">
+                  {argusStatus?.online
+                    ? `PID ${argusStatus.pid} · ${Math.floor((argusStatus.uptimeMs || 0) / 60000)}m`
+                    : argusStatus?.lastError || t('intel.argus.offline')}
+                </div>
+              </div>
+              {!argusStatus?.online && (
+                <button
+                  className="s-btn s-btn-ghost s-btn-sm"
+                  style={{ padding: '3px 8px', fontSize: '0.6rem' }}
+                  onClick={async () => { try { await api()?.argus?.start?.(); notify.success('ARGUS start requested'); } catch (e: any) { notify.error(e?.message || 'Failed'); } }}
+                >
+                  {t('common.start')}
+                </button>
+              )}
+              <div style={{
+                width: 7, height: 7, borderRadius: '50%',
+                background: argusStatus?.online ? 'var(--s-green)' : 'var(--s-red)',
+                boxShadow: `0 0 8px ${argusStatus?.online ? 'var(--s-green)' : 'var(--s-red)'}`,
+                animation: argusStatus?.online ? 'pulse-green 2s ease-in-out infinite' : 'none',
+              }} />
+            </motion.div>
+
+            {/* Hardening Score */}
+            <motion.div
+              className="s-card-compact-spacy"
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.28 }}
+              onClick={() => { if (hardeningScore) setHardeningExpanded(!hardeningExpanded); }}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 12, cursor: hardeningScore ? 'pointer' : 'default',
+                borderLeft: `3px solid ${(combinedSystemScore ?? 0) >= 70 ? 'rgba(61,255,143,0.4)' : 'rgba(255,190,61,0.4)'}`,
+              }}
+            >
+              <div style={{
+                width: 36, height: 36, borderRadius: 10,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                background: (combinedSystemScore ?? 0) >= 70 ? 'rgba(0,255,136,0.08)' : 'rgba(255,170,0,0.08)',
+                fontSize: '0.8rem', fontWeight: 700,
+                color: (combinedSystemScore ?? 0) >= 70 ? 'var(--s-green)' : 'var(--s-amber)',
+              }}>
+                {combinedSystemScore ?? '—'}
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 600, fontSize: '0.75rem' }}>{t('dashboard.systemHealth')}</div>
+                <div style={{ fontSize: '0.6rem', color: 'var(--s-text-dim)', marginTop: 1 }}>
+                  {hardeningScore ? `${hardeningScore.checks.filter(c => c.status === 'pass').length}/${hardeningScore.checks.length} ${t('common.pass')}` : 'Laden...'}
+                </div>
+              </div>
+              <button className="s-btn s-btn-ghost s-btn-sm" style={{ padding: '3px 8px', fontSize: '0.6rem' }}
+                onClick={(e) => { e.stopPropagation(); handleHardeningAudit(); }} disabled={hardeningLoading}>
+                {hardeningLoading ? '...' : '↻'}
+              </button>
+            </motion.div>
+
+            {/* OSOP Session */}
+            <motion.div
+              className="s-card-compact-spacy"
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.31 }}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 12,
+                borderLeft: '3px solid rgba(0,230,118,0.35)',
+              }}
+            >
+              <div style={{
+                width: 36, height: 36, borderRadius: 10,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                background: 'rgba(0,230,118,0.08)', fontSize: 16,
+              }}>
+                {osopSession?.active ? '🛡️' : '⚠️'}
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 600, fontSize: '0.75rem' }}>OSOP Sitzung</div>
+                <div style={{ fontSize: '0.6rem', color: 'var(--s-text-dim)', marginTop: 1 }} className="s-truncate">
+                  {osopSession?.active
+                    ? `Aktiv${osopSession.startedAt ? ` seit ${new Date(osopSession.startedAt).toLocaleTimeString('de-DE')}` : ''}`
+                    : 'Wird geladen...'}
+                </div>
+              </div>
+              {osopSession?.active && (
+                <span style={{ fontSize: '0.5rem', padding: '2px 6px', borderRadius: 4, background: 'rgba(0,230,118,0.12)', color: '#00e676', fontWeight: 700 }}>AKTIV</span>
+              )}
+            </motion.div>
+          </div>
+
+          {/* Hardening Expanded Details */}
+          <AnimatePresence>
+            {hardeningExpanded && hardeningScore && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: 'auto', opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                style={{ overflow: 'hidden' }}
+              >
+                <div className="s-card-compact-spacy" style={{ display: 'flex', flexDirection: 'column', gap: 3, maxHeight: 200, overflowY: 'auto' }}>
+                  {hardeningScore.checks.map((check) => {
+                    const passed = check.status === 'pass';
+                    return (
+                      <div key={check.id} style={{
+                        display: 'flex', alignItems: 'center', gap: 8, padding: '4px 6px',
+                        borderRadius: 6, background: 'rgba(255,255,255,0.012)',
+                      }}>
+                        <span style={{ color: passed ? 'var(--s-green)' : 'var(--s-red)', fontSize: '0.7rem', fontWeight: 700, flexShrink: 0 }}>
+                          {passed ? '✓' : '✕'}
+                        </span>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: '0.7rem', fontWeight: 600, color: '#e2e8f0' }} className="s-truncate">{check.name}</div>
+                          <div style={{ fontSize: '0.575rem', color: 'var(--s-text-dim)' }} className="s-truncate">{check.detail}</div>
+                        </div>
+                        <span style={{ fontSize: '0.525rem', color: 'var(--s-text-dim)', padding: '1px 4px', borderRadius: 6, background: 'rgba(255,255,255,0.03)', flexShrink: 0 }}>
+                          w{check.weight}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
       </div>
 
@@ -471,207 +728,307 @@ const Dashboard: React.FC = () => {
         </div>
       </div>
 
-      {/* ─── VPN + ARGUS + Hardening ─── */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16 }}>
-        {/* VPN Status */}
-        <motion.div
-          className="s-card-spacy"
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.25 }}
-          style={{
-            display: 'flex', alignItems: 'center', gap: 16,
-            borderTop: `2px solid ${vpnStatus?.active ? 'rgba(61,255,143,0.3)' : 'rgba(255,95,95,0.2)'}`,
-          }}
-        >
-          <div style={{
-            width: 42, height: 42, borderRadius: 12,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            background: vpnStatus?.active ? 'rgba(61,255,143,0.08)' : 'rgba(255,95,95,0.08)',
-            border: `1px solid ${vpnStatus?.active ? 'rgba(61,255,143,0.2)' : 'rgba(255,95,95,0.2)'}`,
-            fontSize: 18,
-          }}>
-            {vpnStatus?.active ? '🔐' : '⚠'}
-          </div>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontWeight: 600, fontSize: '0.8125rem' }}>
-              VPN {vpnStatus?.active ? t('dashboard.vpnActive') : t('dashboard.vpnInactive')}
-            </div>
-            <div style={{ fontSize: '0.6875rem', color: 'var(--s-text-muted)', marginTop: 2 }}>
-              {vpnStatus?.active
-                ? `${vpnStatus.provider || 'Unknown'} • ${vpnStatus.protocol || ''} • ${vpnStatus.tunnelIP || ''}`
-                : t('common.inactive')}
-            </div>
-          </div>
-          <div style={{
-            width: 8, height: 8, borderRadius: '50%',
-            background: vpnStatus?.active ? 'var(--s-green)' : 'var(--s-red)',
-            boxShadow: `0 0 10px ${vpnStatus?.active ? 'var(--s-green)' : 'var(--s-red)'}`,
-            animation: vpnStatus?.active ? 'pulse-green 2s ease-in-out infinite' : 'none',
-          }} />
-        </motion.div>
+      {/* ─── DSGVO Privacy Callout ─── */}
+      <motion.div
+        className="s-callout s-callout-success"
+        initial={{ opacity: 0, y: 6 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.32 }}
+        style={{ alignItems: 'center' }}
+      >
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', flex: 1 }}>
+          <InfoBadge glossaryKey="DSGVO" />
+          <InfoBadge glossaryKey="DSGVO Art.17" />
+          <InfoBadge glossaryKey="DSGVO Art.32" />
+          <InfoBadge glossaryKey="LOKAL" />
+          <InfoBadge glossaryKey="OSOP" />
+          <span style={{ fontSize: '0.6rem', color: 'var(--s-text-dim)', marginLeft: 4, lineHeight: 1.4 }}>
+            {'Alle Daten verbleiben lokal · Verschl\u00fcsselung AES-256-GCM · Ephemere Sitzung aktiv'}
+          </span>
+        </div>
+      </motion.div>
 
-        {/* Hardening Score — Clickable + expandable */}
-        <motion.div
-          className="s-card-spacy"
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.28 }}
-          style={{
-            display: 'flex', flexDirection: 'column', gap: 0,
-            cursor: hardeningScore ? 'pointer' : 'default',
-            borderColor: hardeningExpanded ? 'rgba(109,120,255,0.3)' : undefined,
-            transition: 'border-color 0.2s',
-          }}
-          onClick={() => { if (hardeningScore) setHardeningExpanded(!hardeningExpanded); }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-            {hardeningScore ? (
-              <>
-                <div style={{
-                  width: 40, height: 40, borderRadius: 10,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  background: (combinedSystemScore ?? 0) >= 80 ? 'rgba(0,255,136,0.12)' : (combinedSystemScore ?? 0) >= 50 ? 'rgba(255,170,0,0.12)' : 'rgba(255,51,102,0.12)',
-                  border: `1px solid ${(combinedSystemScore ?? 0) >= 80 ? 'rgba(0,255,136,0.3)' : (combinedSystemScore ?? 0) >= 50 ? 'rgba(255,170,0,0.3)' : 'rgba(255,51,102,0.3)'}`,
-                  fontSize: '0.875rem', fontWeight: 700,
-                  color: (combinedSystemScore ?? 0) >= 80 ? 'var(--s-green)' : (combinedSystemScore ?? 0) >= 50 ? 'var(--s-amber)' : 'var(--s-red)',
-                }}>
-                  {combinedSystemScore ?? '—'}
-                </div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 600, fontSize: '0.8125rem' }}>{t('dashboard.systemHealth')}</div>
-                  <div style={{ fontSize: '0.6875rem', color: 'var(--s-text-muted)', marginTop: 2 }}>
-                    {hardeningScore.checks.filter(c => c.status === 'pass').length}/{hardeningScore.checks.length} {t('common.pass')}
-                    {scanResult && <span style={{ marginLeft: 6, color: 'var(--s-cyan)', fontSize: '0.6rem' }}>+ Scan {scanResult.score}%</span>}
-                  </div>
-                  {!systemzustandComplete && (
-                    <div style={{ fontSize: '0.5625rem', color: 'var(--s-amber)', marginTop: 2, opacity: 0.8 }}>
-                      Vollst. Scan f. genauen Wert erforderlich
-                    </div>
-                  )}
-                </div>
-                <span style={{
-                  color: 'var(--s-text-dim)', fontSize: '0.75rem',
-                  transition: 'transform 0.2s',
-                  transform: hardeningExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
-                }}>
-                  ▾
-                </span>
-                <button className="s-btn s-btn-ghost s-btn-sm" onClick={(e) => { e.stopPropagation(); handleHardeningAudit(); }} disabled={hardeningLoading}>
-                  {hardeningLoading ? '...' : '↻'}
-                </button>
-              </>
-            ) : (
-              <>
-                <div style={{
-                  width: 40, height: 40, borderRadius: 10,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  background: 'rgba(109,120,255,0.08)', border: '1px solid rgba(109,120,255,0.2)',
-                  fontSize: 18,
-                }}>
-                  🛡
-                </div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 600, fontSize: '0.8125rem' }}>{t('dashboard.securityStatus')}</div>
-                  <div style={{ fontSize: '0.6875rem', color: 'var(--s-text-muted)', marginTop: 2 }}>
-                    {t('system.scans.hardeningScan')}
-                  </div>
-                </div>
-                <button className="s-btn s-btn-ghost s-btn-sm" onClick={(e) => { e.stopPropagation(); handleHardeningAudit(); }} disabled={hardeningLoading}>
-                  {hardeningLoading ? t('dashboard.scanning') : t('system.scans.runScan')}
-                </button>
-              </>
-            )}
-          </div>
-          {/* Expanded hardening check details */}
-          {hardeningExpanded && hardeningScore && (
+      {/* ═══ Threat Intelligence Automation — FRONT AND CENTER ═══ */}
+      <motion.div
+        className="s-card-spacy"
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.33 }}
+        style={{ borderTop: '2px solid rgba(255,63,180,0.4)', position: 'relative', overflow: 'hidden' }}
+      >
+        {/* Ambient glow */}
+        <div style={{ position: 'absolute', top: -40, right: -40, width: 120, height: 120, borderRadius: '50%', background: 'radial-gradient(circle, rgba(255,63,180,0.06), transparent 70%)', pointerEvents: 'none' }} />
+
+        {/* Header */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <div style={{
-              marginTop: 12, paddingTop: 10, borderTop: '1px solid rgba(255,255,255,0.04)',
-              display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 280, overflowY: 'auto',
-            }}>
-              {hardeningScore.checks.map((check) => {
-                const passed = check.status === 'pass';
-                return (
-                  <div key={check.id} style={{
-                    display: 'flex', alignItems: 'center', gap: 8, padding: '5px 6px',
-                    borderRadius: 6, background: 'rgba(255,255,255,0.015)',
-                    transition: 'background 0.1s',
-                  }}
-                    onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.035)'; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.015)'; }}
-                  >
-                    <span style={{ color: passed ? 'var(--s-green)' : 'var(--s-red)', fontSize: '0.75rem', fontWeight: 700, flexShrink: 0 }}>
-                      {passed ? '✓' : '✕'}
-                    </span>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: '0.75rem', fontWeight: 600, color: '#e2e8f0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        {check.name}
-                      </div>
-                      <div style={{ fontSize: '0.625rem', color: 'var(--s-text-dim)', marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        {check.detail}
-                      </div>
-                    </div>
-                    <span style={{
-                      fontSize: '0.5625rem', color: 'var(--s-text-dim)',
-                      padding: '1px 5px', borderRadius: 8,
-                      background: 'rgba(255,255,255,0.04)', flexShrink: 0,
-                    }}>
-                      w{check.weight}
-                    </span>
-                  </div>
-                );
-              })}
+              width: 36, height: 36, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: 'rgba(255,63,180,0.1)', border: '1px solid rgba(255,63,180,0.2)', fontSize: '1.1rem',
+            }}>{'🔍'}</div>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: 8 }}>
+                {'Automatische Bedrohungsanalyse'}
+                <InfoBadge glossaryKey="DSGVO Art.32" />
+                <InfoBadge glossaryKey="LOKAL" />
+              </div>
+              <div style={{ fontSize: '0.625rem', color: 'var(--s-text-dim)', marginTop: 2 }}>
+                {'YARA-Scans, MISP/IoC-Feeds und Netzwerk\u00fcberwachung laufen automatisch im Hintergrund'}
+              </div>
             </div>
-          )}
-        </motion.div>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {threatAuto?.running && (
+              <motion.span
+                animate={{ opacity: [0.5, 1, 0.5] }}
+                transition={{ duration: 2, repeat: Infinity }}
+                style={{ fontSize: '0.6rem', color: 'var(--s-green)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 4 }}
+              >
+                <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--s-green)', boxShadow: '0 0 6px var(--s-green)' }} />
+                AKTIV
+              </motion.span>
+            )}
+            <div
+              onClick={async () => {
+                try {
+                  const enabled = !threatAuto?.running;
+                  const r = await api()?.threatAuto?.setConfig?.({ enabled });
+                  if (r?.success) notify.info(enabled ? 'Bedrohungsanalyse aktiviert' : 'Bedrohungsanalyse deaktiviert');
+                } catch (e: any) { notify.error(e?.message || 'Fehler'); }
+              }}
+              style={{
+                width: 36, height: 20, borderRadius: 10, position: 'relative', cursor: 'pointer',
+                background: threatAuto?.running ? 'var(--s-green)' : 'rgba(255,255,255,0.1)',
+                border: `1px solid ${threatAuto?.running ? 'rgba(0,230,118,0.4)' : 'rgba(255,255,255,0.15)'}`,
+                transition: 'all 0.2s ease',
+                boxShadow: threatAuto?.running ? '0 0 8px rgba(0,230,118,0.3)' : 'none',
+              }}
+            >
+              <div style={{
+                width: 14, height: 14, borderRadius: '50%', background: '#fff',
+                position: 'absolute', top: 2, left: threatAuto?.running ? 19 : 2,
+                transition: 'left 0.2s ease', boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+              }} />
+            </div>
+          </div>
+        </div>
 
-        {/* ARGUS Backend Status */}
-        <motion.div
-          className="s-card-spacy"
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.31 }}
-          style={{
-            display: 'flex', alignItems: 'center', gap: 16,
-            borderTop: `2px solid ${argusStatus?.online ? 'rgba(61,255,143,0.3)' : 'rgba(255,95,95,0.2)'}`,
-          }}
-        >
+        {/* 3-Column Status Grid */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 14 }}>
+          {/* YARA Auto-Scan */}
           <div style={{
-            width: 42, height: 42, borderRadius: 12,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            background: argusStatus?.online ? 'rgba(61,255,143,0.08)' : 'rgba(255,95,95,0.08)',
-            border: `1px solid ${argusStatus?.online ? 'rgba(61,255,143,0.2)' : 'rgba(255,95,95,0.2)'}`,
-            fontSize: 18,
+            padding: '12px 14px', borderRadius: 10,
+            background: 'linear-gradient(135deg, rgba(255,63,180,0.04), rgba(8,8,28,0.5))',
+            border: '1px solid rgba(255,63,180,0.12)',
           }}>
-            {argusStatus?.online ? '🧠' : '💀'}
-          </div>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontWeight: 600, fontSize: '0.8125rem' }}>
-              ARGUS {argusStatus?.online ? t('intel.argus.online') : argusStatus?.status === 'starting' ? t('intel.argus.starting') : t('intel.argus.offline')}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+              <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--s-magenta)' }}>{'🔬 YARA Auto-Scan'}</span>
+              {threatAuto?.yara?.scanning && (
+                <motion.span animate={{ opacity: [0.4, 1, 0.4] }} transition={{ duration: 1.5, repeat: Infinity }}
+                  style={{ fontSize: '0.55rem', color: 'var(--s-cyan)', fontWeight: 600 }}>{'Scannt...'}</motion.span>
+              )}
             </div>
-            <div style={{ fontSize: '0.6875rem', color: 'var(--s-text-muted)', marginTop: 2 }}>
-              {argusStatus?.online
-                ? `PID ${argusStatus.pid} • Uptime ${Math.floor((argusStatus.uptimeMs || 0) / 60000)}m`
-                : argusStatus?.lastError || t('intel.argus.offline')}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.6rem' }}>
+                <span style={{ color: 'var(--s-text-dim)' }}>{'Letzter Scan'}</span>
+                <span style={{ color: 'var(--s-text-muted)', fontFamily: 'var(--s-font-mono)' }}>
+                  {threatAuto?.yara?.lastScan ? new Date(threatAuto.yara.lastScan).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) : '\u2014'}
+                </span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.6rem' }}>
+                <span style={{ color: 'var(--s-text-dim)' }}>{'Dateien gepr\u00fcft'}</span>
+                <span style={{ color: 'var(--s-text-muted)', fontFamily: 'var(--s-font-mono)' }}>{threatAuto?.yara?.filesScanned ?? 0}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.6rem' }}>
+                <span style={{ color: 'var(--s-text-dim)' }}>{'Bedrohungen'}</span>
+                <span style={{ color: (threatAuto?.yara?.totalThreats ?? 0) > 0 ? 'var(--s-red)' : 'var(--s-green)', fontWeight: 700, fontFamily: 'var(--s-font-mono)' }}>
+                  {threatAuto?.yara?.totalThreats ?? 0}
+                </span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.55rem' }}>
+                <span style={{ color: 'var(--s-text-dim)' }}>{'Gesamt-Scans'}</span>
+                <span style={{ color: 'var(--s-text-dim)', fontFamily: 'var(--s-font-mono)' }}>{threatAuto?.yara?.totalScans ?? 0}</span>
+              </div>
             </div>
-          </div>
-          {!argusStatus?.online && (
             <button
               className="s-btn s-btn-ghost s-btn-sm"
-              onClick={async () => { try { await api()?.argus?.start?.(); notify.success('ARGUS start requested'); } catch (e: any) { notify.error(e?.message || 'Failed to start ARGUS'); } }}
-              style={{ color: 'var(--s-red)', borderRadius: 8 }}
+              style={{ width: '100%', marginTop: 8, fontSize: '0.6rem', borderColor: 'rgba(255,63,180,0.15)' }}
+              disabled={threatAuto?.yara?.scanning}
+              onClick={async () => {
+                try {
+                  notify.info('YARA-Scan wird gestartet...');
+                  const r = await api()?.threatAuto?.triggerYara?.();
+                  if (r?.success) notify.success(`YARA-Scan: ${r.files} Dateien, ${r.threats} Bedrohungen`);
+                } catch (e: any) { notify.error(e?.message || 'Fehler'); }
+              }}
             >
-              {t('common.start')}
+              {threatAuto?.yara?.scanning ? 'Wird gescannt...' : '\u21bb Jetzt scannen'}
             </button>
-          )}
+          </div>
+
+          {/* IoC Network Check */}
           <div style={{
-            width: 8, height: 8, borderRadius: '50%',
-            background: argusStatus?.online ? 'var(--s-green)' : 'var(--s-red)',
-            boxShadow: `0 0 10px ${argusStatus?.online ? 'var(--s-green)' : 'var(--s-red)'}`,
-            animation: argusStatus?.online ? 'pulse-green 2s ease-in-out infinite' : 'none',
-          }} />
-        </motion.div>
-      </div>
+            padding: '12px 14px', borderRadius: 10,
+            background: 'linear-gradient(135deg, rgba(60,240,255,0.04), rgba(8,8,28,0.5))',
+            border: '1px solid rgba(60,240,255,0.12)',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+              <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--s-cyan)' }}>{'🌐 IoC-Netzwerkpr\u00fcfung'}</span>
+              {threatAuto?.ioc?.checking && (
+                <motion.span animate={{ opacity: [0.4, 1, 0.4] }} transition={{ duration: 1.5, repeat: Infinity }}
+                  style={{ fontSize: '0.55rem', color: 'var(--s-cyan)', fontWeight: 600 }}>{'Pr\u00fcft...'}</motion.span>
+              )}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.6rem' }}>
+                <span style={{ color: 'var(--s-text-dim)' }}>{'Letzte Pr\u00fcfung'}</span>
+                <span style={{ color: 'var(--s-text-muted)', fontFamily: 'var(--s-font-mono)' }}>
+                  {threatAuto?.ioc?.lastCheck ? new Date(threatAuto.ioc.lastCheck).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '\u2014'}
+                </span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.6rem' }}>
+                <span style={{ color: 'var(--s-text-dim)' }}>{'Verbindungen'}</span>
+                <span style={{ color: 'var(--s-text-muted)', fontFamily: 'var(--s-font-mono)' }}>{threatAuto?.ioc?.connectionsChecked ?? 0}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.6rem' }}>
+                <span style={{ color: 'var(--s-text-dim)' }}>{'IoC-Treffer'}</span>
+                <span style={{ color: (threatAuto?.ioc?.totalHits ?? 0) > 0 ? 'var(--s-red)' : 'var(--s-green)', fontWeight: 700, fontFamily: 'var(--s-font-mono)' }}>
+                  {threatAuto?.ioc?.totalHits ?? 0}
+                </span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.55rem' }}>
+                <span style={{ color: 'var(--s-text-dim)' }}>{'Gesamt-Pr\u00fcfungen'}</span>
+                <span style={{ color: 'var(--s-text-dim)', fontFamily: 'var(--s-font-mono)' }}>{threatAuto?.ioc?.totalChecks ?? 0}</span>
+              </div>
+            </div>
+            <button
+              className="s-btn s-btn-ghost s-btn-sm"
+              style={{ width: '100%', marginTop: 8, fontSize: '0.6rem', borderColor: 'rgba(60,240,255,0.15)' }}
+              disabled={threatAuto?.ioc?.checking}
+              onClick={async () => {
+                try {
+                  const r = await api()?.threatAuto?.triggerIoC?.();
+                  if (r?.success) notify.success(`IoC-Pr\u00fcfung: ${r.connections} Verbindungen, ${r.hits} Treffer`);
+                } catch (e: any) { notify.error(e?.message || 'Fehler'); }
+              }}
+            >
+              {threatAuto?.ioc?.checking ? 'Wird gepr\u00fcft...' : '\u21bb Jetzt pr\u00fcfen'}
+            </button>
+          </div>
+
+          {/* MISP Feed Sync */}
+          <div style={{
+            padding: '12px 14px', borderRadius: 10,
+            background: 'linear-gradient(135deg, rgba(167,139,250,0.04), rgba(8,8,28,0.5))',
+            border: '1px solid rgba(167,139,250,0.12)',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+              <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--s-purple)' }}>{'📡 MISP/IoC-Feeds'}</span>
+              {threatAuto?.feed?.syncing && (
+                <motion.span animate={{ opacity: [0.4, 1, 0.4] }} transition={{ duration: 1.5, repeat: Infinity }}
+                  style={{ fontSize: '0.55rem', color: 'var(--s-purple)', fontWeight: 600 }}>{'Sync...'}</motion.span>
+              )}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.6rem' }}>
+                <span style={{ color: 'var(--s-text-dim)' }}>{'Letzter Sync'}</span>
+                <span style={{ color: 'var(--s-text-muted)', fontFamily: 'var(--s-font-mono)' }}>
+                  {threatAuto?.feed?.lastSync ? new Date(threatAuto.feed.lastSync).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) : '\u2014'}
+                </span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.6rem' }}>
+                <span style={{ color: 'var(--s-text-dim)' }}>{'IP-Indikatoren'}</span>
+                <span style={{ color: 'var(--s-text-muted)', fontFamily: 'var(--s-font-mono)' }}>{(threatAuto?.feed?.ips ?? 0).toLocaleString('de-DE')}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.6rem' }}>
+                <span style={{ color: 'var(--s-text-dim)' }}>{'Hash-Indikatoren'}</span>
+                <span style={{ color: 'var(--s-text-muted)', fontFamily: 'var(--s-font-mono)' }}>{(threatAuto?.feed?.hashes ?? 0).toLocaleString('de-DE')}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.55rem' }}>
+                <span style={{ color: 'var(--s-text-dim)' }}>{'N\u00e4chster Sync'}</span>
+                <span style={{ color: 'var(--s-text-dim)', fontFamily: 'var(--s-font-mono)' }}>
+                  {threatAuto?.feed?.nextSync ? new Date(threatAuto.feed.nextSync).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) : '\u2014'}
+                </span>
+              </div>
+            </div>
+            <button
+              className="s-btn s-btn-ghost s-btn-sm"
+              style={{ width: '100%', marginTop: 8, fontSize: '0.6rem', borderColor: 'rgba(167,139,250,0.15)' }}
+              disabled={threatAuto?.feed?.syncing}
+              onClick={async () => {
+                try {
+                  notify.info('Feed-Sync wird gestartet...');
+                  const r = await api()?.threatAuto?.triggerFeed?.();
+                  if (r?.success) notify.success(`Feed-Sync: ${r.ips} IPs, ${r.hashes} Hashes geladen`);
+                } catch (e: any) { notify.error(e?.message || 'Fehler'); }
+              }}
+            >
+              {threatAuto?.feed?.syncing ? 'Wird synchronisiert...' : '\u21bb Jetzt synchronisieren'}
+            </button>
+          </div>
+        </div>
+
+        {/* Recent Threats — inline, no hidden tabs */}
+        {((threatAuto?.recentYaraHits?.length ?? 0) > 0 || (threatAuto?.recentIoCHits?.length ?? 0) > 0) && (
+          <div style={{ borderTop: '1px solid rgba(255,63,180,0.08)', paddingTop: 10 }}>
+            <div style={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--s-text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>
+              {'Letzte Bedrohungen'}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 120, overflowY: 'auto' }}>
+              {(threatAuto?.recentYaraHits || []).slice(0, 3).map((hit, i) => (
+                <div key={`yara-${i}`} style={{
+                  display: 'flex', alignItems: 'center', gap: 8, padding: '4px 8px', borderRadius: 6,
+                  background: hit.severity === 'malicious' ? 'rgba(255,95,95,0.06)' : 'rgba(255,190,61,0.04)',
+                  border: `1px solid ${hit.severity === 'malicious' ? 'rgba(255,95,95,0.12)' : 'rgba(255,190,61,0.1)'}`,
+                }}>
+                  <span style={{ fontSize: '0.7rem' }}>{hit.severity === 'malicious' ? '\ud83d\udea8' : '\u26a0\ufe0f'}</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: '0.625rem', fontWeight: 600, color: hit.severity === 'malicious' ? 'var(--s-red)' : 'var(--s-amber)' }} className="s-truncate">
+                      {hit.file.split('\\').pop() || hit.file}
+                    </div>
+                    <div style={{ fontSize: '0.55rem', color: 'var(--s-text-dim)' }} className="s-truncate">
+                      {'YARA: '}{hit.rules.join(', ')}
+                    </div>
+                  </div>
+                  <span style={{ fontSize: '0.5rem', color: 'var(--s-text-dim)', fontFamily: 'var(--s-font-mono)', flexShrink: 0 }}>
+                    {new Date(hit.ts).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                </div>
+              ))}
+              {(threatAuto?.recentIoCHits || []).slice(0, 3).map((hit, i) => (
+                <div key={`ioc-${i}`} style={{
+                  display: 'flex', alignItems: 'center', gap: 8, padding: '4px 8px', borderRadius: 6,
+                  background: 'rgba(255,95,95,0.06)', border: '1px solid rgba(255,95,95,0.12)',
+                }}>
+                  <span style={{ fontSize: '0.7rem' }}>{'\ud83d\udea8'}</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: '0.625rem', fontWeight: 600, color: 'var(--s-red)' }}>
+                      {hit.ip}
+                    </div>
+                    <div style={{ fontSize: '0.55rem', color: 'var(--s-text-dim)' }} className="s-truncate">
+                      {'Prozess: '}{hit.process}{' \u00b7 Quelle: '}{hit.source}
+                    </div>
+                  </div>
+                  <span style={{ fontSize: '0.5rem', color: 'var(--s-text-dim)', fontFamily: 'var(--s-font-mono)', flexShrink: 0 }}>
+                    {new Date(hit.ts).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Footer info */}
+        <div style={{ fontSize: '0.55rem', color: 'var(--s-text-dim)', marginTop: 8, display: 'flex', alignItems: 'center', gap: 8, opacity: 0.7 }}>
+          <span>{'100% lokal \u2014 keine externen API-Aufrufe f\u00fcr Scans'}</span>
+          <span>{'·'}</span>
+          <span>{'YARA alle '}{threatAuto ? '30' : '?'}{' Min'}</span>
+          <span>{'·'}</span>
+          <span>{'IoC alle '}{threatAuto ? '60' : '?'}{' Sek'}</span>
+          <span>{'·'}</span>
+          <span>{'Feeds alle '}{threatAuto ? '6' : '?'}{' Std'}</span>
+        </div>
+      </motion.div>
 
       {/* ─── Sentinel Deep Scan Results ─── */}
       {(scanning || scanResult) && (
@@ -886,35 +1243,33 @@ const Dashboard: React.FC = () => {
         </motion.div>
       )}
 
-      {/* ─── Quick Actions + Activity Feed ─── */}
+      {/* ═══ Quick Actions + Activity Feed ═══ */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
-        {/* Quick Actions — Premium gradient buttons */}
+        {/* Quick Actions — Feature Cards */}
         <motion.div
-          className="s-card-spacy"
           initial={{ opacity: 0, x: -12 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ delay: 0.35 }}
+          style={{ display: 'flex', flexDirection: 'column', gap: 12 }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+          <div className="s-section-header">
             <span className="s-heading-sm">{t('dashboard.quickActions')}</span>
-            <div style={{ flex: 1, height: 1, background: 'linear-gradient(90deg, rgba(109,120,255,0.15), transparent)' }} />
+            <div className="s-section-header-line" />
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
             {QUICK_ACTIONS.map((action, ai) => {
               const actionColors = ['var(--s-cyan)', 'var(--s-green)', 'var(--s-purple)', 'var(--s-amber)'];
               const ac = actionColors[ai % actionColors.length];
+              const shortcuts = ['Ctrl+D', 'Ctrl+H', 'Ctrl+N', 'Ctrl+F'];
               return (
                 <motion.button
                   key={action.id}
-                  whileHover={{ y: -2, boxShadow: `0 4px 16px ${ac}18` }}
+                  className="s-feature-card"
+                  whileHover={{ y: -3 }}
                   whileTap={{ scale: 0.97 }}
                   style={{
-                    display: 'flex', flexDirection: 'column', alignItems: 'center',
-                    padding: '16px 12px', gap: 8, textAlign: 'center',
-                    background: 'rgba(109,120,255,0.03)', border: `1px solid rgba(109,120,255,0.12)`,
-                    borderRadius: 10, cursor: 'pointer', color: 'var(--s-text)',
-                    borderTop: `2px solid ${ac}44`,
-                    transition: 'all 0.2s ease',
+                    alignItems: 'center', textAlign: 'center',
+                    color: 'var(--s-text)', borderTop: `2px solid ${ac}33`,
                   }}
                   onClick={async () => {
                     try {
@@ -929,16 +1284,23 @@ const Dashboard: React.FC = () => {
                   }}
                   disabled={action.id === 'deep-scan' && scanning}
                 >
-                  <div style={{
-                    width: 36, height: 36, borderRadius: 10,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    background: `${ac}10`, fontSize: 20,
-                    filter: `drop-shadow(0 0 6px ${ac})`,
+                  <div className="s-feature-card-icon" style={{
+                    background: `${ac}10`, fontSize: 22, margin: '0 auto',
+                    filter: `drop-shadow(0 0 8px ${ac})`,
                   }}>
                     {action.icon}
                   </div>
-                  <span style={{ fontSize: '0.75rem', fontWeight: 600 }}>{t(action.labelKey)}</span>
-                  <span style={{ fontSize: '0.6rem', color: 'var(--s-text-dim)', lineHeight: 1.3 }}>{t(action.descKey)}</span>
+                  <span style={{ fontSize: '0.8rem', fontWeight: 700, position: 'relative', zIndex: 1 }}>{t(action.labelKey)}</span>
+                  <span style={{ fontSize: '0.6rem', color: 'var(--s-text-dim)', lineHeight: 1.3, position: 'relative', zIndex: 1 }}>{t(action.descKey)}</span>
+                  <span style={{
+                    fontSize: '0.5rem', color: 'var(--s-text-dim)', opacity: 0.5,
+                    fontFamily: 'var(--s-font-mono)', padding: '1px 5px',
+                    borderRadius: 4, background: 'rgba(109,120,255,0.04)',
+                    border: '1px solid rgba(109,120,255,0.06)',
+                    position: 'relative', zIndex: 1,
+                  }}>
+                    {shortcuts[ai] || ''}
+                  </span>
                 </motion.button>
               );
             })}
@@ -1031,64 +1393,70 @@ const Dashboard: React.FC = () => {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 12 }}
               onClick={(e) => e.stopPropagation()}
-              style={{ maxWidth: 560, borderTopColor: `${scoreColor}66`, borderTopWidth: 2 }}
+              style={{ maxWidth: 620, borderTopColor: `${scoreColor}66`, borderTopWidth: 2 }}
             >
-              <div className="s-modal-header">
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div className="s-modal-header" style={{ background: `linear-gradient(135deg, ${scoreColor}06, transparent)` }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
                   <div style={{
-                    width: 40, height: 40, borderRadius: 10,
+                    width: 46, height: 46, borderRadius: 12,
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                     background: `${scoreColor}12`, border: `1px solid ${scoreColor}33`,
-                    fontSize: '1.25rem', fontWeight: 800, fontFamily: 'var(--s-font-display)',
-                    color: scoreColor,
+                    fontSize: '1.35rem', fontWeight: 800, fontFamily: 'var(--s-font-display)',
+                    color: scoreColor, textShadow: `0 0 12px ${scoreColor}44`,
                   }}>
                     {healthScore}
                   </div>
                   <div>
-                    <span style={{ fontWeight: 700, fontSize: '0.9375rem' }}>System Health Report</span>
-                    <div style={{ fontSize: '0.6875rem', color: 'var(--s-text-muted)', marginTop: 2 }}>
-                      {healthScore >= 80 ? 'System is well protected' : healthScore >= 50 ? 'Some areas need attention' : 'Critical issues detected'}
+                    <span style={{ fontWeight: 700, fontSize: '1rem' }}>Systemzustand</span>
+                    <div style={{ fontSize: '0.675rem', color: 'var(--s-text-muted)', marginTop: 2 }}>
+                      {healthScore >= 80 ? '● System ist gut geschützt' : healthScore >= 50 ? '◐ Einige Bereiche erfordern Aufmerksamkeit' : '○ Kritische Probleme erkannt'}
                     </div>
                   </div>
                 </div>
                 <button className="s-modal-close" onClick={() => setHealthDetailOpen(false)}>✕</button>
               </div>
-              <div className="s-modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                {/* Live System Resources */}
+              <div className="s-modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 16, maxHeight: '65vh', overflowY: 'auto' }}>
+                {/* ─── Resources Section ─── */}
                 <div>
-                  <div style={{ fontSize: '0.6875rem', fontWeight: 700, color: 'var(--s-text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>
-                    System Resources
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                    <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--s-text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                      ⚡ Systemressourcen
+                    </span>
+                    <div style={{ flex: 1, height: 1, background: 'linear-gradient(90deg, rgba(109,120,255,0.15), transparent)' }} />
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
                     {[
-                      { label: 'CPU', value: stats.cpu, desc: stats.cpu > 80 ? 'High load — check processes' : stats.cpu > 50 ? 'Moderate usage' : 'Normal operation' },
-                      { label: 'Memory', value: stats.ram, desc: stats.ram > 80 ? 'Memory pressure — close unused apps' : stats.ram > 50 ? 'Moderate usage' : 'Plenty available' },
-                      { label: 'Disk', value: stats.disk, desc: stats.disk > 80 ? 'Low disk space — cleanup recommended' : stats.disk > 50 ? 'Moderate usage' : 'Sufficient space' },
+                      { label: 'CPU', value: stats.cpu, desc: stats.cpu > 80 ? 'Hohe Last' : stats.cpu > 50 ? 'Moderate Last' : 'Normal' },
+                      { label: 'Speicher', value: stats.ram, desc: stats.ram > 80 ? 'Speicherdruck' : stats.ram > 50 ? 'Moderate Last' : 'Verfügbar' },
+                      { label: 'Festplatte', value: stats.disk, desc: stats.disk > 80 ? 'Wenig Platz' : stats.disk > 50 ? 'Moderat' : 'Ausreichend' },
                     ].map(r => {
                       const c = r.value > 80 ? 'var(--s-red)' : r.value > 50 ? 'var(--s-amber)' : 'var(--s-green)';
                       return (
-                        <div key={r.label} style={{ padding: '8px 10px', borderRadius: 8, background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                            <span style={{ fontSize: '0.6875rem', fontWeight: 600 }}>{r.label}</span>
-                            <span style={{ fontSize: '0.75rem', fontWeight: 700, fontFamily: 'var(--s-font-mono)', color: c }}>{r.value}%</span>
+                        <div key={r.label} style={{ padding: '10px 12px', borderRadius: 8, background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', borderTop: `2px solid ${c}33` }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                            <span style={{ fontSize: '0.675rem', fontWeight: 600 }}>{r.label}</span>
+                            <span style={{ fontSize: '0.8rem', fontWeight: 800, fontFamily: 'var(--s-font-display)', color: c }}>{r.value}%</span>
                           </div>
-                          <div className="s-progress-bar" style={{ height: 3, marginBottom: 4 }}>
-                            <div className="s-progress-fill" style={{ width: `${r.value}%`, background: c }} />
+                          <div className="s-progress-bar" style={{ height: 4, marginBottom: 5, borderRadius: 2 }}>
+                            <div className="s-progress-fill" style={{ width: `${r.value}%`, background: `linear-gradient(90deg, ${c}, ${c}66)`, boxShadow: `0 0 4px ${c}33` }} />
                           </div>
-                          <div style={{ fontSize: '0.6rem', color: 'var(--s-text-dim)' }}>{r.desc}</div>
+                          <div style={{ fontSize: '0.575rem', color: 'var(--s-text-dim)' }}>{r.desc}</div>
                         </div>
                       );
                     })}
                   </div>
                 </div>
 
-                {/* Health Components */}
+                {/* ─── Health Components ─── */}
                 {health?.components && health.components.length > 0 && (
                   <div>
-                    <div style={{ fontSize: '0.6875rem', fontWeight: 700, color: 'var(--s-text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>
-                      Health Components
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                      <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--s-text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                        🔧 Systemkomponenten
+                      </span>
+                      <div style={{ flex: 1, height: 1, background: 'linear-gradient(90deg, rgba(109,120,255,0.15), transparent)' }} />
                     </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
                       {health.components.map((comp, i) => {
                         const ok = comp.status === 'healthy' || comp.status === 'good' || comp.status === 'pass';
                         const warn = comp.status === 'warning' || comp.status === 'degraded';
@@ -1097,15 +1465,15 @@ const Dashboard: React.FC = () => {
                             display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px',
                             borderRadius: 6, background: 'rgba(255,255,255,0.015)',
                           }}>
-                            <span style={{ color: ok ? 'var(--s-green)' : warn ? 'var(--s-amber)' : 'var(--s-red)', fontSize: '0.75rem', fontWeight: 700, width: 14, textAlign: 'center', flexShrink: 0 }}>
+                            <span style={{ color: ok ? 'var(--s-green)' : warn ? 'var(--s-amber)' : 'var(--s-red)', fontSize: '0.7rem', fontWeight: 700, width: 14, textAlign: 'center', flexShrink: 0 }}>
                               {ok ? '✓' : warn ? '⚠' : '✕'}
                             </span>
                             <div style={{ flex: 1, minWidth: 0 }}>
-                              <div style={{ fontSize: '0.75rem', fontWeight: 600 }}>{comp.name}</div>
-                              {comp.message && <div style={{ fontSize: '0.625rem', color: 'var(--s-text-dim)', marginTop: 1 }}>{comp.message}</div>}
+                              <div style={{ fontSize: '0.725rem', fontWeight: 600 }}>{comp.name}</div>
+                              {comp.message && <div style={{ fontSize: '0.6rem', color: 'var(--s-text-dim)', marginTop: 1 }} className="s-truncate">{comp.message}</div>}
                             </div>
                             <span style={{
-                              fontSize: '0.5625rem', padding: '2px 6px', borderRadius: 8,
+                              fontSize: '0.55rem', padding: '2px 6px', borderRadius: 6,
                               background: ok ? 'rgba(0,255,136,0.08)' : warn ? 'rgba(255,170,0,0.08)' : 'rgba(255,51,102,0.08)',
                               color: ok ? 'var(--s-green)' : warn ? 'var(--s-amber)' : 'var(--s-red)',
                               fontWeight: 600, textTransform: 'uppercase',
@@ -1119,23 +1487,27 @@ const Dashboard: React.FC = () => {
                   </div>
                 )}
 
-                {/* Protection Status Summary */}
+                {/* ─── Protection Status ─── */}
                 <div>
-                  <div style={{ fontSize: '0.6875rem', fontWeight: 700, color: 'var(--s-text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>
-                    Protection Status
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                    <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--s-text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                      🛡 Schutzstatus
+                    </span>
+                    <div style={{ flex: 1, height: 1, background: 'linear-gradient(90deg, rgba(109,120,255,0.15), transparent)' }} />
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
                     {[
-                      { label: 'Firewall', status: 'Active', ok: true },
-                      { label: 'Network Monitor', status: 'Running', ok: true },
+                      { label: 'Firewall', status: 'Aktiv', ok: true },
+                      { label: 'Netzwerk-Monitor', status: 'Läuft', ok: true },
                       { label: 'ARGUS Backend', status: argusStatus?.online ? 'Online' : 'Offline', ok: !!argusStatus?.online },
-                      { label: 'VPN Tunnel', status: vpnStatus?.active ? `${vpnStatus.provider}` : 'Not connected', ok: !!vpnStatus?.active },
-                      { label: 'Scan Engine', status: scanResult ? `Score: ${scanResult.score}%` : 'Not scanned yet', ok: scanResult ? scanResult.score >= 70 : false },
-                      { label: 'Hardening', status: hardeningScore ? `${hardeningScore.percentage}%` : 'Not audited', ok: hardeningScore ? hardeningScore.percentage >= 70 : false },
+                      { label: 'VPN Tunnel', status: vpnStatus?.active ? `${vpnStatus.provider}` : 'Nicht verbunden', ok: !!vpnStatus?.active },
+                      { label: 'Scan-Engine', status: scanResult ? `Wert: ${scanResult.score}%` : 'Noch nicht gescannt', ok: scanResult ? scanResult.score >= 70 : false },
+                      { label: 'Härtung', status: hardeningScore ? `${hardeningScore.percentage}%` : 'Noch nicht geprüft', ok: hardeningScore ? hardeningScore.percentage >= 70 : false },
                     ].map(p => (
                       <div key={p.label} style={{
-                        display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px',
+                        display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px',
                         borderRadius: 6, background: 'rgba(255,255,255,0.015)',
+                        borderLeft: `2px solid ${p.ok ? 'rgba(61,255,143,0.3)' : 'rgba(255,95,95,0.3)'}`,
                       }}>
                         <div style={{
                           width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
@@ -1143,34 +1515,70 @@ const Dashboard: React.FC = () => {
                           boxShadow: `0 0 6px ${p.ok ? 'var(--s-green)' : 'var(--s-red)'}`,
                         }} />
                         <div style={{ flex: 1 }}>
-                          <div style={{ fontSize: '0.6875rem', fontWeight: 600 }}>{p.label}</div>
+                          <div style={{ fontSize: '0.675rem', fontWeight: 600 }}>{p.label}</div>
                         </div>
-                        <span style={{ fontSize: '0.625rem', color: p.ok ? 'var(--s-green)' : 'var(--s-red)', fontWeight: 600 }}>{p.status}</span>
+                        <span style={{ fontSize: '0.6rem', color: p.ok ? 'var(--s-green)' : 'var(--s-red)', fontWeight: 600 }}>{p.status}</span>
                       </div>
                     ))}
                   </div>
                 </div>
 
-                {/* Recommendations */}
-                <div style={{ padding: '10px 12px', borderRadius: 8, background: 'rgba(109,120,255,0.04)', border: '1px solid rgba(109,120,255,0.1)' }}>
-                  <div style={{ fontSize: '0.6875rem', fontWeight: 700, color: 'var(--s-text-dim)', marginBottom: 6 }}>Recommendations</div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: '0.6875rem', color: 'var(--s-text-secondary)' }}>
-                    {!scanResult && <div>→ Run a Deep Scan to get a full security assessment</div>}
-                    {!hardeningScore && <div>→ Run System Hardening Audit to check security controls</div>}
-                    {!vpnStatus?.active && <div>→ Consider activating a VPN for network privacy</div>}
-                    {!argusStatus?.online && <div>→ Start ARGUS backend for threat intelligence scanning</div>}
-                    {stats.ram > 80 && <div>→ High memory usage — close unused applications</div>}
-                    {stats.disk > 80 && <div>→ Low disk space — run Cleanup from Quick Actions</div>}
+                {/* ─── DSGVO Compliance ─── */}
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                    <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--s-text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                      🔒 Datenschutz (DSGVO)
+                    </span>
+                    <div style={{ flex: 1, height: 1, background: 'linear-gradient(90deg, rgba(0,230,118,0.15), transparent)' }} />
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 5 }}>
+                    {[
+                      { label: 'Datenverarbeitung', value: '100% Lokal', ok: true, art: 'Art.5' },
+                      { label: 'Verschl\u00fcsselung', value: 'AES-256-GCM', ok: true, art: 'Art.32' },
+                      { label: 'Sitzung', value: osopSession?.active ? 'Ephemer (OSOP)' : 'Laden...', ok: !!osopSession?.active, art: 'Art.17' },
+                      { label: 'Datenl\u00f6schung', value: 'Bei Exit', ok: true, art: 'Art.17' },
+                      { label: 'IoC-Pr\u00fcfung', value: 'Lokal (kein API)', ok: true, art: 'Art.5' },
+                      { label: 'PIN-Schutz', value: 'PBKDF2-SHA512', ok: true, art: 'Art.32' },
+                      { label: 'MFA (TOTP)', value: 'RFC 6238', ok: true, art: 'Art.32' },
+                      { label: 'Logging', value: 'Nur RAM (OSOP)', ok: true, art: 'Art.5' },
+                    ].map(d => (
+                      <div key={d.label} style={{
+                        display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px',
+                        borderRadius: 6, background: 'rgba(0,230,118,0.02)', border: '1px solid rgba(0,230,118,0.08)',
+                      }}>
+                        <div style={{ width: 5, height: 5, borderRadius: '50%', background: d.ok ? '#00e676' : 'var(--s-amber)', boxShadow: `0 0 4px ${d.ok ? '#00e676' : 'var(--s-amber)'}`, flexShrink: 0 }} />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: '0.6rem', fontWeight: 600, color: 'var(--s-text-secondary)' }}>{d.label}</div>
+                        </div>
+                        <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                          <span style={{ fontSize: '0.55rem', color: 'var(--s-text-dim)' }}>{d.value} </span>
+                          <span style={{ fontSize: '0.5rem', color: '#00e676', fontWeight: 700 }}>{d.art}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* ─── Empfehlungen ─── */}
+                <div className="s-callout s-callout-info" style={{ flexDirection: 'column', gap: 6 }}>
+                  <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--s-text-secondary)' }}>💡 Empfehlungen</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: '0.675rem', color: 'var(--s-text-secondary)' }}>
+                    {!scanResult && <div>{'→ Führen Sie einen Tiefen-Scan durch für eine vollständige Bewertung'}</div>}
+                    {!hardeningScore && <div>{'→ Starten Sie das Härtungs-Audit für Sicherheitskontrollen'}</div>}
+                    {!vpnStatus?.active && <div>{'→ VPN aktivieren für mehr Netzwerk-Privatsphäre'}</div>}
+                    {!argusStatus?.online && <div>{'→ ARGUS-Backend starten für Bedrohungserkennung'}</div>}
+                    {stats.ram > 80 && <div>{'→ Hohe Speicherauslastung — Programme schließen'}</div>}
+                    {stats.disk > 80 && <div>{'→ Wenig Festplattenspeicher — Bereinigung empfohlen'}</div>}
                     {scanResult && scanResult.score >= 80 && hardeningScore && hardeningScore.percentage >= 80 && vpnStatus?.active && argusStatus?.online && stats.ram <= 80 && stats.disk <= 80 && (
-                      <div style={{ color: 'var(--s-green)' }}>✓ All systems optimal — no action needed</div>
+                      <div style={{ color: 'var(--s-green)' }}>{'✓ Alle Systeme optimal — keine Maßnahmen erforderlich'}</div>
                     )}
                   </div>
                 </div>
               </div>
               <div className="s-modal-footer">
-                <button className="s-btn s-btn-ghost s-btn-sm" onClick={() => { setHealthDetailOpen(false); handleFullScan(); }}>Run Deep Scan</button>
-                <button className="s-btn s-btn-ghost s-btn-sm" onClick={() => { setHealthDetailOpen(false); handleHardeningAudit(); }}>Run Hardening Audit</button>
-                <button className="s-btn s-btn-ghost s-btn-sm" onClick={() => { setHealthDetailOpen(false); navigate('/system'); }}>Open System →</button>
+                <button className="s-btn s-btn-primary s-btn-sm" onClick={() => { setHealthDetailOpen(false); handleFullScan(); }}>⚡ Tiefen-Scan</button>
+                <button className="s-btn s-btn-ghost s-btn-sm" onClick={() => { setHealthDetailOpen(false); handleHardeningAudit(); }}>{'🛡 Härtungs-Audit'}</button>
+                <button className="s-btn s-btn-ghost s-btn-sm" onClick={() => { setHealthDetailOpen(false); navigate('/system'); }}>{'System →'}</button>
               </div>
             </motion.div>
           </motion.div>

@@ -598,6 +598,14 @@ app.whenReady().then(async () => {
   }
 
   setupCache();
+
+  // ═══ OSOP: Initialize ephemeral session FIRST (before any data stores) ═══
+  try {
+    const { initSessionManager } = require('./services/sessionManager');
+    initSessionManager();
+    console.log('[MAIN] OSOP Session Manager initialized (ephemeral key in RAM)');
+  } catch (err) { console.warn('[MAIN] OSOP init failed (non-fatal):', err); }
+
   try {
     configureSecurityEventsStore({ baseDir: app.getPath('userData') });
   } catch (err) {
@@ -636,6 +644,70 @@ app.whenReady().then(async () => {
     console.warn('[MAIN] FIM init failed (non-fatal):', err);
   }
 
+  // Hardening Plan services init
+  try {
+    const { initLocalAuth } = require('./services/localAuth');
+    initLocalAuth();
+    console.log('[MAIN] LocalAuth initialized');
+  } catch (err) { console.warn('[MAIN] LocalAuth init failed (non-fatal):', err); }
+
+  try {
+    const { initTotpAuth } = require('./services/totpAuth');
+    initTotpAuth();
+    console.log('[MAIN] TotpAuth initialized');
+  } catch (err) { console.warn('[MAIN] TotpAuth init failed (non-fatal):', err); }
+
+  try {
+    const { initUpdateVerifier } = require('./services/updateVerifier');
+    initUpdateVerifier();
+    console.log('[MAIN] UpdateVerifier initialized');
+  } catch (err) { console.warn('[MAIN] UpdateVerifier init failed (non-fatal):', err); }
+
+  try {
+    const { initSiemExporter } = require('./services/siemExporter');
+    initSiemExporter();
+    console.log('[MAIN] SIEM Exporter initialized');
+  } catch (err) { console.warn('[MAIN] SIEM init failed (non-fatal):', err); }
+
+  try {
+    const { initThreatIntel } = require('./services/threatIntel');
+    initThreatIntel();
+    console.log('[MAIN] ThreatIntel initialized');
+  } catch (err) { console.warn('[MAIN] ThreatIntel init failed (non-fatal):', err); }
+
+  try {
+    const { initAdaptiveAccess } = require('./services/adaptiveAccess');
+    const { getHealthReport } = require('./services/healthCheckService');
+    initAdaptiveAccess(async () => {
+      const report = await getHealthReport({ force: true });
+      const checks = Object.values(report.checks) as Array<{ status: string }>;
+      const passed = checks.filter((c: any) => c.status === 'pass').length;
+      return Math.round((passed / checks.length) * 100);
+    });
+    console.log('[MAIN] AdaptiveAccess initialized');
+  } catch (err) { console.warn('[MAIN] AdaptiveAccess init failed (non-fatal):', err); }
+
+  // ═══ Automated Threat Intelligence Engine ═══
+  try {
+    const { initThreatIntelAutomation } = require('./services/threatIntelAutomation');
+    const { getArgusManager } = require('./services/argusManager');
+    const { checkIP, refreshFeeds, getStats } = require('./services/threatIntel');
+    const { getNetworkTrafficSnapshot } = require('./services/networkMonitor');
+    initThreatIntelAutomation({
+      argusManager: getArgusManager(),
+      getConnections: async () => {
+        try {
+          const conns = await getNetworkTrafficSnapshot(500);
+          return conns.map((c: any) => ({ remoteAddress: c.remoteIP || '', owningProcess: c.pid?.toString(), processName: c.processName || '' }));
+        } catch { return []; }
+      },
+      checkIP,
+      refreshFeeds,
+      getStats,
+    });
+    console.log('[MAIN] ThreatIntelAutomation engine started');
+  } catch (err) { console.warn('[MAIN] ThreatIntelAutomation init failed (non-fatal):', err); }
+
   createTray();
   createWindow();
   startScheduledScans();
@@ -659,6 +731,17 @@ app.on('before-quit', (event) => {
     isQuitting = true;
     stopPendingRuleSweep();
     stopPolicyScanner();
+    try { const { stopThreatIntel } = require('./services/threatIntel'); stopThreatIntel(); } catch { /* ok */ }
+    try { const { stopAdaptiveAccess } = require('./services/adaptiveAccess'); stopAdaptiveAccess(); } catch { /* ok */ }
+    try { const { stopThreatIntelAutomation } = require('./services/threatIntelAutomation'); stopThreatIntelAutomation(); } catch { /* ok */ }
+
+    // ═══ OSOP: Perform session wipe before final quit ═══
+    try {
+      const { shutdownSessionManager } = require('./services/sessionManager');
+      const report = shutdownSessionManager();
+      console.log(`[OSOP] Wipe report: ${report.filesDeleted.length} files, ${report.dirsDeleted.length} dirs, ${report.errors.length} errors`);
+    } catch (e: any) { console.warn('[OSOP] Shutdown wipe failed:', e?.message); }
+
     app.quit();
     return;
   }
@@ -675,6 +758,12 @@ app.on('will-quit', async (event) => {
     await stopPolicyScanner();
     await closeFirewallHistoryStore();
     console.log('[MAIN] Firewall history store closed');
+
+    // ═══ OSOP: Final wipe pass (catches anything missed by before-quit) ═══
+    try {
+      const { shutdownSessionManager } = require('./services/sessionManager');
+      shutdownSessionManager();
+    } catch { /* already wiped in before-quit */ }
   } catch (err) {
     console.warn('[MAIN] Failed to dispose SessionStore:', err);
   } finally {
@@ -2445,7 +2534,9 @@ ipcMain.handle('shield-block-dangerous-subnets', async () => {
 
 ipcMain.handle('shield-get-ip-metadata-stats', async () => {
   try {
-    return { success: true, totalLookups: 0, cachedEntries: 0, lastLookup: null };
+    const { getIpCacheStats } = await import('./ipc/shieldHandlers');
+    const stats = getIpCacheStats();
+    return { success: true, ...stats };
   } catch (error: any) {
     return { success: false, error: error.message };
   }
@@ -3836,11 +3927,12 @@ ipcMain.handle('net-sandbox-toggle', async (_event, enabled: boolean) => {
 
 // Fallback crypto using Node.js crypto when ARGUS is offline
 const FALLBACK_ALGO = 'aes-256-gcm';
-const FALLBACK_KEY_SEED = 'sentinel-vault-local-key-v1'; // Derived key, not used for production secrets
 
 function getFallbackKey(): Buffer {
   const nodeCrypto = require('crypto');
-  return nodeCrypto.createHash('sha256').update(FALLBACK_KEY_SEED).digest();
+  const os = require('os');
+  const material = `sentinel-vault:${os.hostname()}:${app.getPath('userData')}`;
+  return nodeCrypto.createHash('sha256').update(material).digest();
 }
 
 function fallbackEncrypt(plaintext: string): string {
@@ -4461,14 +4553,36 @@ ipcMain.handle('ghost-import-hosts-blocklist', async (_event, url: string) => {
 // GHOST CHANNEL FIXES — Vault
 // ============================================
 
+ipcMain.handle('vault-select-files', async () => {
+  try {
+    const result = await dialog.showOpenDialog(mainWindow || (undefined as any), {
+      title: 'Dateien zum Verschlüsseln auswählen',
+      properties: ['openFile', 'multiSelections'],
+    });
+    if (result.canceled || !result.filePaths.length) return { success: true, files: [] };
+    return { success: true, files: result.filePaths };
+  } catch (error: any) { return { success: false, files: [], error: error.message }; }
+});
+
+ipcMain.handle('vault-select-output-dir', async () => {
+  try {
+    const result = await dialog.showOpenDialog(mainWindow || (undefined as any), {
+      title: 'Ausgabeordner wählen',
+      properties: ['openDirectory'],
+    });
+    if (result.canceled || !result.filePaths.length) return { success: true, dir: null };
+    return { success: true, dir: result.filePaths[0] };
+  } catch (error: any) { return { success: false, dir: null, error: error.message }; }
+});
+
 ipcMain.handle('vault-encrypt-files', async (_event, filePaths: string[], password: string) => {
   try {
     const crypto = require('crypto');
-    const vaultDir = path.join(app.getPath('userData'), 'vault-files');
-    if (!fs.existsSync(vaultDir)) fs.mkdirSync(vaultDir, { recursive: true });
     let count = 0;
+    const results: string[] = [];
     for (const fp of filePaths) {
       try {
+        if (!fs.existsSync(fp)) { results.push(`Nicht gefunden: ${fp}`); continue; }
         const data = fs.readFileSync(fp);
         const salt = crypto.randomBytes(16);
         const key = crypto.pbkdf2Sync(password, salt, 100000, 32, 'sha256');
@@ -4476,14 +4590,15 @@ ipcMain.handle('vault-encrypt-files', async (_event, filePaths: string[], passwo
         const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
         const encrypted = Buffer.concat([cipher.update(data), cipher.final()]);
         const tag = cipher.getAuthTag();
-        const outName = path.basename(fp) + '.sentinel';
-        const outPath = path.join(vaultDir, outName);
+        const outPath = fp + '.sentinel';
         const header = Buffer.concat([salt, iv, tag, encrypted]);
         fs.writeFileSync(outPath, header);
+        fs.unlinkSync(fp);
         count++;
-      } catch { /* skip */ }
+        results.push(outPath);
+      } catch (e: any) { results.push(`Fehler: ${path.basename(fp)} — ${e.message}`); }
     }
-    return { success: true, encryptedCount: count, message: `Encrypted ${count} files` };
+    return { success: true, encryptedCount: count, message: `${count} Datei(en) verschl\u00fcsselt`, results };
   } catch (error: any) { return { success: false, message: error.message }; }
 });
 
@@ -4501,8 +4616,9 @@ ipcMain.handle('vault-decrypt-file', async (_event, filePath: string, password: 
     const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
     const outPath = filePath.replace(/\.sentinel$/, '');
     fs.writeFileSync(outPath, decrypted);
-    return { success: true, outputPath: outPath, message: 'File decrypted' };
-  } catch (error: any) { return { success: false, message: error.message || 'Decryption failed (wrong password?)' }; }
+    fs.unlinkSync(filePath);
+    return { success: true, outputPath: outPath, message: 'Datei entschl\u00fcsselt' };
+  } catch (error: any) { return { success: false, message: error.message || 'Entschl\u00fcsselung fehlgeschlagen (falsches Passwort?)' }; }
 });
 
 ipcMain.handle('vault-open-secure-note', async (_event, noteId: string, _password: string) => {
@@ -4795,5 +4911,495 @@ ipcMain.handle('restart-as-admin', async () => {
     requestElevationSync();
     return { success: true };
   } catch (error: any) { return { success: false, error: error.message }; }
+});
+
+// ============================================
+// HARDENING PLAN — P1: Local PIN Authentication
+// ============================================
+
+ipcMain.handle('auth-get-status', async () => {
+  try {
+    const { getAuthStatus } = await import('./services/localAuth');
+    return { success: true, ...getAuthStatus() };
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('auth-set-pin', async (_event, pin: string) => {
+  try {
+    const { setPin } = await import('./services/localAuth');
+    setPin(pin);
+    addActivityLog('Auth', 'Set PIN', 'Local PIN lock configured', 'success');
+    return { success: true };
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('auth-remove-pin', async (_event, currentPin: string) => {
+  try {
+    const { removePin } = await import('./services/localAuth');
+    removePin(currentPin);
+    addActivityLog('Auth', 'Remove PIN', 'Local PIN lock removed', 'warning');
+    return { success: true };
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('auth-authenticate', async (_event, pin: string, totpCode?: string) => {
+  try {
+    const { authenticate } = await import('./services/localAuth');
+    const result = authenticate(pin);
+    if (!result.success) return result;
+
+    // Check if TOTP MFA is enabled — require second factor
+    try {
+      const { getTotpStatus, verifyTotpCode } = await import('./services/totpAuth');
+      const totpStatus = getTotpStatus();
+      if (totpStatus.enabled) {
+        if (!totpCode) {
+          // PIN correct but TOTP required — return partial success
+          return { success: false, totpRequired: true, token: result.token, message: 'TOTP-Code erforderlich (zweiter Faktor)' };
+        }
+        // Verify TOTP code
+        try {
+          verifyTotpCode(totpCode);
+        } catch (totpErr: any) {
+          return { success: false, totpRequired: true, error: totpErr.message || 'Ungültiger TOTP-Code' };
+        }
+        addActivityLog('Auth', 'Login', 'PIN + TOTP MFA authentication successful', 'success');
+      } else {
+        addActivityLog('Auth', 'Login', 'PIN authentication successful', 'success');
+      }
+    } catch {
+      // TOTP module not available — PIN-only auth is fine
+      addActivityLog('Auth', 'Login', 'PIN authentication successful', 'success');
+    }
+
+    // OSOP: Mark ephemeral session as authenticated (Zero-Trust satisfied)
+    try { const { markAuthenticated } = await import('./services/sessionManager'); markAuthenticated(); } catch { /* ok */ }
+    return result;
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('auth-check-session', async () => {
+  try {
+    const { checkSession } = await import('./services/localAuth');
+    return { success: true, ...checkSession() };
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('auth-lock', async () => {
+  try {
+    const { lockNow } = await import('./services/localAuth');
+    lockNow();
+    addActivityLog('Auth', 'Lock', 'Session locked manually', 'info');
+    return { success: true };
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('auth-set-require-on-launch', async (_event, enabled: boolean) => {
+  try {
+    const { setRequireOnLaunch } = await import('./services/localAuth');
+    return { success: true, ...setRequireOnLaunch(enabled) };
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('auth-is-required', async () => {
+  try {
+    const { isAuthRequired } = await import('./services/localAuth');
+    return { success: true, required: isAuthRequired() };
+  } catch (e: any) { return { success: false, error: e.message, required: false }; }
+});
+
+// ============================================
+// HARDENING PLAN — P1b: TOTP Multi-Factor Authentication
+// ============================================
+
+ipcMain.handle('totp-get-status', async () => {
+  try {
+    const { getTotpStatus } = await import('./services/totpAuth');
+    return { success: true, ...getTotpStatus() };
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('totp-setup', async () => {
+  try {
+    const { setupTotp } = await import('./services/totpAuth');
+    return setupTotp();
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('totp-verify-and-enable', async (_event, token: string) => {
+  try {
+    const { verifyAndEnableTotp } = await import('./services/totpAuth');
+    return verifyAndEnableTotp(token);
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('totp-verify', async (_event, token: string) => {
+  try {
+    const { verifyTotpCode } = await import('./services/totpAuth');
+    return { success: true, ...verifyTotpCode(token) };
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('totp-disable', async (_event, token: string) => {
+  try {
+    const { disableTotp } = await import('./services/totpAuth');
+    return disableTotp(token);
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+// ============================================
+// HARDENING PLAN — P2: Update Signature Verifier (BSI APP.6.A4)
+// ============================================
+
+ipcMain.handle('update-verify-manifest', async (_event, manifest: any) => {
+  try {
+    const { verifyManifest } = await import('./services/updateVerifier');
+    const result = verifyManifest(manifest);
+    addActivityLog('Updater', 'Verify', `${result.version}: ${result.valid ? 'VALID' : 'REJECTED'} (${result.errors.length} errors)`, result.valid ? 'success' : 'error');
+    return { success: true, ...result };
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('update-verify-file', async (_event, filePath: string, expectedSha256: string) => {
+  try {
+    const { verifyFileHash } = await import('./services/updateVerifier');
+    const valid = verifyFileHash(filePath, expectedSha256);
+    return { success: true, valid };
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('update-list-keys', async () => {
+  try {
+    const { listTrustedKeys } = await import('./services/updateVerifier');
+    return { success: true, keys: listTrustedKeys() };
+  } catch (e: any) { return { success: true, keys: [] }; }
+});
+
+ipcMain.handle('update-add-key', async (_event, id: string, pem: string) => {
+  try {
+    const { addTrustedKey } = await import('./services/updateVerifier');
+    addTrustedKey(id, pem);
+    addActivityLog('Updater', 'Add Key', `Trusted signing key added: ${id}`, 'success');
+    return { success: true };
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('update-remove-key', async (_event, id: string) => {
+  try {
+    const { removeTrustedKey } = await import('./services/updateVerifier');
+    const removed = removeTrustedKey(id);
+    if (removed) addActivityLog('Updater', 'Remove Key', `Trusted signing key removed: ${id}`, 'warning');
+    return { success: true, removed };
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('update-get-history', async () => {
+  try {
+    const { getVerifyHistory } = await import('./services/updateVerifier');
+    return { success: true, history: getVerifyHistory() };
+  } catch (e: any) { return { success: true, history: [] }; }
+});
+
+ipcMain.handle('update-generate-keypair', async () => {
+  try {
+    const { generateSigningKeyPair } = await import('./services/updateVerifier');
+    const kp = generateSigningKeyPair();
+    return { success: true, ...kp };
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+// ============================================
+// HARDENING PLAN — P3: SIEM/MDR Event Export
+// ============================================
+
+ipcMain.handle('siem-get-config', async () => {
+  try {
+    const { getSiemConfig } = await import('./services/siemExporter');
+    return { success: true, config: getSiemConfig() };
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('siem-set-config', async (_event, update: any) => {
+  try {
+    const { setSiemConfig } = await import('./services/siemExporter');
+    const config = setSiemConfig(update);
+    return { success: true, config };
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('siem-export-events', async (_event, format?: string) => {
+  try {
+    const { exportEvents, convertSecurityEventsToSiem } = await import('./services/siemExporter');
+    const { queryAllSecurityEvents } = await import('./services/securityEventsStore');
+    const raw = queryAllSecurityEvents(10000);
+    const events = convertSecurityEventsToSiem(raw);
+    const result = exportEvents(events, (format as any) || undefined);
+    addActivityLog('SIEM', 'Export', `${result.count} events exported (${format || 'json'})`, 'success');
+    return result;
+  } catch (e: any) { return { success: false, error: e.message, count: 0 }; }
+});
+
+ipcMain.handle('siem-send-syslog', async () => {
+  try {
+    const { sendToSyslog, convertSecurityEventsToSiem } = await import('./services/siemExporter');
+    const { queryAllSecurityEvents } = await import('./services/securityEventsStore');
+    const raw = queryAllSecurityEvents(1000);
+    const events = convertSecurityEventsToSiem(raw);
+    const result = await sendToSyslog(events);
+    addActivityLog('SIEM', 'Syslog', `${result.sent} events sent to syslog`, result.success ? 'success' : 'error');
+    return result;
+  } catch (e: any) { return { success: false, sent: 0, error: e.message }; }
+});
+
+ipcMain.handle('siem-list-exports', async () => {
+  try {
+    const { listExports } = await import('./services/siemExporter');
+    return { success: true, exports: listExports() };
+  } catch (e: any) { return { success: true, exports: [] }; }
+});
+
+// ============================================
+// THREAT INTELLIGENCE — MISP IoC Feeds (Local)
+// ============================================
+
+ipcMain.handle('threat-intel-refresh', async () => {
+  try {
+    const { refreshFeeds } = await import('./services/threatIntel');
+    return await refreshFeeds();
+  } catch (e: any) { return { success: false, error: e.message, ips: 0, domains: 0, hashes: 0, errors: [e.message] }; }
+});
+
+ipcMain.handle('threat-intel-check-ip', async (_event, ip: string) => {
+  try {
+    const { checkIP } = await import('./services/threatIntel');
+    return { success: true, ...checkIP(ip) };
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('threat-intel-check-hash', async (_event, hash: string) => {
+  try {
+    const { checkHash } = await import('./services/threatIntel');
+    return { success: true, ...checkHash(hash) };
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('threat-intel-stats', async () => {
+  try {
+    const { getStats } = await import('./services/threatIntel');
+    return { success: true, ...getStats() };
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('threat-intel-get-config', async () => {
+  try {
+    const { getThreatIntelConfig } = await import('./services/threatIntel');
+    return { success: true, config: getThreatIntelConfig() };
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('threat-intel-set-config', async (_event, update: any) => {
+  try {
+    const { setThreatIntelConfig } = await import('./services/threatIntel');
+    return { success: true, config: setThreatIntelConfig(update) };
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+// ============================================
+// SBOM INTEGRITY VERIFIER (BSI APP.6)
+// ============================================
+
+ipcMain.handle('sbom-generate', async () => {
+  try {
+    const { generateManifest } = await import('./services/sbomVerifier');
+    const manifest = generateManifest();
+    return { success: true, fileCount: manifest.entries.length, version: manifest.version };
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('sbom-verify', async () => {
+  try {
+    const { verifyIntegrity } = await import('./services/sbomVerifier');
+    return { success: true, ...verifyIntegrity() };
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('sbom-info', async () => {
+  try {
+    const { getManifestInfo } = await import('./services/sbomVerifier');
+    return { success: true, ...getManifestInfo() };
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('sbom-check-script-block-logging', async () => {
+  try {
+    const { checkScriptBlockLogging } = await import('./services/sbomVerifier');
+    return { success: true, ...checkScriptBlockLogging() };
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+// ============================================
+// ADAPTIVE ACCESS CONTROL (Zero Trust)
+// ============================================
+
+ipcMain.handle('adaptive-get-config', async () => {
+  try {
+    const { getAdaptiveConfig } = await import('./services/adaptiveAccess');
+    return { success: true, config: getAdaptiveConfig() };
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('adaptive-set-config', async (_event, update: any) => {
+  try {
+    const { setAdaptiveConfig } = await import('./services/adaptiveAccess');
+    return { success: true, config: setAdaptiveConfig(update) };
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('adaptive-get-state', async () => {
+  try {
+    const { getAdaptiveState } = await import('./services/adaptiveAccess');
+    return { success: true, ...getAdaptiveState() };
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('adaptive-restrict', async () => {
+  try {
+    const { manualRestrict } = await import('./services/adaptiveAccess');
+    return await manualRestrict();
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('adaptive-lift', async () => {
+  try {
+    const { manualLift } = await import('./services/adaptiveAccess');
+    return await manualLift();
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+// ============================================
+// YARA SCAN — Bridge to ARGUS Python
+// ============================================
+
+ipcMain.handle('yara-scan-file', async (_event, filePath: string) => {
+  try {
+    const result = await getArgusManager().safeFetch('/api/yara/scan', { method: 'POST', body: JSON.stringify({ file_path: filePath }) }) as Record<string, unknown>;
+    return { success: true, ...result };
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('yara-list-rules', async () => {
+  try {
+    const result = await getArgusManager().safeFetch('/api/yara/rules') as Record<string, unknown>;
+    return { success: true, ...result };
+  } catch (e: any) { return { success: true, rules: [], count: 0 }; }
+});
+
+// ============================================
+// THREAT INTEL AUTOMATION ENGINE
+// ============================================
+
+ipcMain.handle('threat-auto-get-status', async () => {
+  try {
+    const { getAutomationStatus } = await import('./services/threatIntelAutomation');
+    return { success: true, ...getAutomationStatus() };
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('threat-auto-get-config', async () => {
+  try {
+    const { getAutomationConfig } = await import('./services/threatIntelAutomation');
+    return { success: true, config: getAutomationConfig() };
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('threat-auto-set-config', async (_event, update: any) => {
+  try {
+    const { setAutomationConfig } = await import('./services/threatIntelAutomation');
+    return { success: true, config: setAutomationConfig(update) };
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('threat-auto-trigger-yara', async () => {
+  try {
+    const { triggerYaraScan } = await import('./services/threatIntelAutomation');
+    return { success: true, ...(await triggerYaraScan()) };
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('threat-auto-trigger-ioc', async () => {
+  try {
+    const { triggerIoCCheck } = await import('./services/threatIntelAutomation');
+    return { success: true, ...(await triggerIoCCheck()) };
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('threat-auto-trigger-feed', async () => {
+  try {
+    const { triggerFeedSync } = await import('./services/threatIntelAutomation');
+    return { success: true, ...(await triggerFeedSync()) };
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('threat-auto-clear-yara-cache', async () => {
+  try {
+    const { clearYaraCache } = await import('./services/threatIntelAutomation');
+    clearYaraCache();
+    return { success: true };
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+// ============================================
+// UEBA — Bridge to ARGUS Python
+// ============================================
+
+ipcMain.handle('ueba-train', async (_event, snapshot: any) => {
+  try {
+    const result = await getArgusManager().safeFetch('/api/ueba/train', { method: 'POST', body: JSON.stringify(snapshot) }) as Record<string, unknown>;
+    addActivityLog('UEBA', 'Train', `Baseline updated: ${result.baseline_connections || 0} connections, ${result.baseline_processes || 0} processes`, 'success');
+    return { success: true, ...result };
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('ueba-detect', async (_event, snapshot: any) => {
+  try {
+    const result = await getArgusManager().safeFetch('/api/ueba/detect', { method: 'POST', body: JSON.stringify(snapshot) }) as Record<string, unknown>;
+    const anomalies = result.anomalies as any[] | undefined;
+    if (anomalies && anomalies.length > 0) {
+      addActivityLog('UEBA', 'Anomaly', `${anomalies.length} anomalies detected`, 'warning');
+    }
+    return { success: true, ...result };
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('ueba-status', async () => {
+  try {
+    const result = await getArgusManager().safeFetch('/api/ueba/status') as Record<string, unknown>;
+    return { success: true, ...result };
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+// ============================================
+// OSOP — One-Session-Only Protocol IPC
+// ============================================
+
+ipcMain.handle('osop-get-session', async () => {
+  try {
+    const { getSessionInfo } = await import('./services/sessionManager');
+    return { success: true, ...getSessionInfo() };
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('osop-get-nonce', async () => {
+  try {
+    const { getIpcNonce } = await import('./services/sessionManager');
+    return { success: true, nonce: getIpcNonce() };
+  } catch (e: any) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('osop-validate-nonce', async (_event, nonce: string) => {
+  try {
+    const { validateIpcNonce } = await import('./services/sessionManager');
+    return { success: true, valid: validateIpcNonce(nonce) };
+  } catch (e: any) { return { success: false, error: e.message }; }
 });
 

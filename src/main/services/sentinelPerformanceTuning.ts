@@ -136,8 +136,14 @@ export async function checkSuperfetch(): Promise<PerfCheck> {
 export async function checkUltimatePowerPlan(): Promise<PerfCheck> {
   return safe('perf-ultimate', 'Ultimate Performance Plan', async () => {
     const out = await ps(`$p=powercfg /getactivescheme 2>&1;$p`);
-    const isUltimate = out.toLowerCase().includes('ultimate');
-    return { id: 'perf-ultimate', name: 'Power Plan', status: isUltimate ? 'pass' : 'warn', detail: out, risk: 'low', actionable: true };
+    const low = out.toLowerCase();
+    // Accept Ultimate Performance, High Performance, or German "Höchstleistung"
+    const HIGH_PERF_GUID = '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c';
+    const ULTIMATE_GUID = 'e9a42b02-d5df-448d-aa00-03f14749eb61';
+    const isHighPerf = low.includes('ultimate') || low.includes('high performance') ||
+      low.includes('h\u00f6chstleistung') || low.includes('hochleistung') ||
+      out.includes(HIGH_PERF_GUID) || out.includes(ULTIMATE_GUID);
+    return { id: 'perf-ultimate', name: 'Power Plan', status: isHighPerf ? 'pass' : 'warn', detail: out, risk: 'low', actionable: !isHighPerf };
   });
 }
 

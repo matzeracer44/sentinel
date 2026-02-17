@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import i18n from './i18n/i18n';
 import { AdminProvider } from './contexts/AdminContext';
 import AppShell from './components/Layout/AppShell';
+import { useOsopSession } from './hooks/useOsopSession';
 
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const FirewallPage = lazy(() => import('./pages/FirewallPage'));
@@ -41,32 +42,40 @@ const queryClient = new QueryClient({
   },
 });
 
+// OSOP Guard — must be inside QueryClientProvider for useQueryClient access
+const OsopGuard: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  useOsopSession();
+  return <>{children}</>;
+};
+
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <I18nextProvider i18n={i18n}>
-        <AdminProvider>
-          <MemoryRouter initialEntries={['/']}>
-            <Suspense fallback={<PageLoader />}>
-              <Routes>
-                <Route element={<AppShell />}>
-                  <Route path="/" element={<Dashboard />} />
-                  <Route path="/firewall" element={<FirewallPage />} />
-                  <Route path="/intel" element={<IntelPage />} />
-                  <Route path="/network" element={<NetworkPage />} />
-                  <Route path="/dns" element={<DnsPage />} />
-                  <Route path="/system" element={<SystemPage />} />
-                  <Route path="/vault" element={<VaultPage />} />
-                  <Route path="/automation" element={<AutomationPage />} />
-                  <Route path="/settings" element={<SettingsPage />} />
-                  <Route path="/connector-map" element={<ConnectorMapPage />} />
-                </Route>
-              </Routes>
-            </Suspense>
-            <NotificationProvider><div /></NotificationProvider>
-          </MemoryRouter>
-        </AdminProvider>
-      </I18nextProvider>
+      <OsopGuard>
+        <I18nextProvider i18n={i18n}>
+          <AdminProvider>
+            <MemoryRouter initialEntries={['/']}>
+              <Suspense fallback={<PageLoader />}>
+                <Routes>
+                  <Route element={<AppShell />}>
+                    <Route path="/" element={<Dashboard />} />
+                    <Route path="/firewall" element={<FirewallPage />} />
+                    <Route path="/intel" element={<IntelPage />} />
+                    <Route path="/network" element={<NetworkPage />} />
+                    <Route path="/dns" element={<DnsPage />} />
+                    <Route path="/system" element={<SystemPage />} />
+                    <Route path="/vault" element={<VaultPage />} />
+                    <Route path="/automation" element={<AutomationPage />} />
+                    <Route path="/settings" element={<SettingsPage />} />
+                    <Route path="/connector-map" element={<ConnectorMapPage />} />
+                  </Route>
+                </Routes>
+              </Suspense>
+              <NotificationProvider><div /></NotificationProvider>
+            </MemoryRouter>
+          </AdminProvider>
+        </I18nextProvider>
+      </OsopGuard>
     </QueryClientProvider>
   );
 }

@@ -5,6 +5,7 @@ Flask-based web dashboard with deep intelligence display
 
 from flask import Flask, render_template_string, request, jsonify, redirect, url_for, flash
 import json
+import threading
 from datetime import datetime
 import os
 from pathlib import Path
@@ -12,7 +13,7 @@ from pathlib import Path
 def create_app(argus):
     """Create Flask application"""
     app = Flask(__name__)
-    app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'argus-panoptes-secret-key')
+    app.secret_key = os.environ.get('FLASK_SECRET_KEY', os.urandom(32).hex())
 
     # --- Rate Limiting (from security config) ---
     _sec_cfg = argus.config_manager.get('security', {})
@@ -175,6 +176,119 @@ def create_app(argus):
             return jsonify({'sandbox': detector.sandbox.is_active})
         except Exception as e:
             return jsonify({'error': str(e)}), 500
+
+    # ── YARA Rule Scanning (Local Signature Detection) ──
+    @app.route('/api/yara/scan', methods=['POST'])
+    def api_yara_scan():
+        try:
+            data = request.get_json() or {}
+            file_path = data.get('file_path')
+            if not file_path:
+                return jsonify({'error': 'file_path required'}), 400
+            try:
+                import yara
+            except ImportError:
+                return jsonify({'error': 'yara-python not installed. Run: pip install yara-python', 'matches': [], 'available': False}), 200
+            rules_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'data', 'yara_rules')
+            if not os.path.isdir(rules_dir):
+                os.makedirs(rules_dir, exist_ok=True)
+                return jsonify({'matches': [], 'rules_loaded': 0, 'detail': 'No YARA rules found. Place .yar files in ARGUS/data/yara_rules/'})
+            rule_files = {f: os.path.join(rules_dir, f) for f in os.listdir(rules_dir) if f.endswith(('.yar', '.yara'))}
+            if not rule_files:
+                return jsonify({'matches': [], 'rules_loaded': 0, 'detail': 'No .yar/.yara rule files found in data/yara_rules/'})
+            rules = yara.compile(filepaths=rule_files)
+            matches = rules.match(file_path, timeout=30)
+            result = [{'rule': m.rule, 'namespace': m.namespace, 'tags': list(m.tags), 'strings': [str(s) for s in m.strings[:10]]} for m in matches]
+            return jsonify({'matches': result, 'rules_loaded': len(rule_files), 'file': file_path})
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/yara/rules', methods=['GET'])
+    def api_yara_rules():
+        try:
+            rules_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'data', 'yara_rules')
+            if not os.path.isdir(rules_dir):
+                return jsonify({'rules': [], 'count': 0})
+            files = [f for f in os.listdir(rules_dir) if f.endswith(('.yar', '.yara'))]
+            return jsonify({'rules': files, 'count': len(files), 'path': rules_dir})
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    # ── UEBA Anomaly Detection (Local ML Baseline) ──
+    # NOTE: ips/ports stored as plain lists (JSON-safe). Deduplication via 'not in'.
+    _ueba_baseline = {'connections': {}, 'processes': {}, 'updated_at': None}
+    _ueba_lock = threading.Lock()
+
+    @app.route('/api/ueba/train', methods=['POST'])
+    def api_ueba_train():
+        """Learn normal behavior from provided WMI/network snapshots."""
+        try:
+            data = request.get_json() or {}
+            connections = data.get('connections', [])
+            processes = data.get('processes', [])
+            with _ueba_lock:
+                for conn in connections:
+                    key = f"{conn.get('process', 'unknown')}:{conn.get('remotePort', 0)}"
+                    entry = _ueba_baseline['connections'].setdefault(key, {'count': 0, 'ips': []})
+                    entry['count'] += 1
+                    rip = conn.get('remoteIP')
+                    if rip and rip not in entry['ips']:
+                        entry['ips'].append(rip)
+                for proc in processes:
+                    name = proc.get('name', 'unknown').lower()
+                    entry = _ueba_baseline['processes'].setdefault(name, {'seen': 0, 'ports': []})
+                    entry['seen'] += 1
+                _ueba_baseline['updated_at'] = datetime.utcnow().isoformat() + 'Z'
+                total_conns = sum(v['count'] for v in _ueba_baseline['connections'].values())
+                total_procs = len(_ueba_baseline['processes'])
+            return jsonify({'success': True, 'baseline_connections': total_conns, 'baseline_processes': total_procs})
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/ueba/detect', methods=['POST'])
+    def api_ueba_detect():
+        """Detect anomalies by comparing current snapshot against learned baseline."""
+        try:
+            data = request.get_json() or {}
+            connections = data.get('connections', [])
+            anomalies = []
+            with _ueba_lock:
+                if not _ueba_baseline['updated_at']:
+                    return jsonify({'anomalies': [], 'detail': 'No baseline trained yet. POST to /api/ueba/train first.'})
+                for conn in connections:
+                    key = f"{conn.get('process', 'unknown')}:{conn.get('remotePort', 0)}"
+                    baseline = _ueba_baseline['connections'].get(key)
+                    if not baseline:
+                        anomalies.append({
+                            'type': 'new_connection_pattern',
+                            'process': conn.get('process'),
+                            'remoteIP': conn.get('remoteIP'),
+                            'remotePort': conn.get('remotePort'),
+                            'confidence': 0.7,
+                            'detail': f"Process {conn.get('process')} never connected to port {conn.get('remotePort')} before",
+                        })
+                    elif conn.get('remoteIP') and conn['remoteIP'] not in baseline.get('ips', []):
+                        anomalies.append({
+                            'type': 'new_destination',
+                            'process': conn.get('process'),
+                            'remoteIP': conn.get('remoteIP'),
+                            'remotePort': conn.get('remotePort'),
+                            'confidence': 0.5,
+                            'detail': f"Process {conn.get('process')} contacting new IP {conn.get('remoteIP')}",
+                        })
+            return jsonify({'anomalies': anomalies, 'checked': len(connections), 'baseline_age': _ueba_baseline['updated_at']})
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    @app.route('/api/ueba/status', methods=['GET'])
+    def api_ueba_status():
+        with _ueba_lock:
+            return jsonify({
+                'trained': _ueba_baseline['updated_at'] is not None,
+                'updated_at': _ueba_baseline['updated_at'],
+                'connection_patterns': len(_ueba_baseline['connections']),
+                'known_processes': len(_ueba_baseline['processes']),
+            })
 
     @app.route('/dashboard')
     def dashboard():

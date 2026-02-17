@@ -8,6 +8,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
+import InfoBadge from '../Common/InfoBadge';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const api = (): any => (window as any).electronAPI;
@@ -38,6 +39,8 @@ const GlobalBar: React.FC = () => {
   const [lastActivity, setLastActivity] = useState<ActivityEntry | null>(null);
   const [undoRedo, setUndoRedo] = useState<UndoRedoState>({ canUndo: false, canRedo: false, undoCount: 0, redoCount: 0 });
   const [argusOnline, setArgusOnline] = useState<boolean | null>(null);
+  const [osopActive, setOsopActive] = useState<boolean | null>(null);
+  const [mfaEnabled, setMfaEnabled] = useState<boolean>(false);
 
   const fetchState = useCallback(async () => {
     try {
@@ -53,6 +56,14 @@ const GlobalBar: React.FC = () => {
       if (a?.argus?.getHealth) {
         const h = await a.argus.getHealth();
         setArgusOnline(h?.data?.status === 'running');
+      }
+      if (a?.osop?.getSession) {
+        const s = await a.osop.getSession();
+        setOsopActive(s?.success && !!s?.sessionId);
+      }
+      if (a?.totp?.getStatus) {
+        const t = await a.totp.getStatus();
+        setMfaEnabled(!!t?.enabled);
       }
     } catch (e: any) { console.warn('[GlobalBar] fetchState:', e?.message); }
   }, []);
@@ -147,6 +158,31 @@ const GlobalBar: React.FC = () => {
           <span style={{ color: 'var(--s-text-dim)', fontStyle: 'italic', fontSize: '0.625rem' }}>Awaiting activity...</span>
         )}
       </div>
+
+      <div style={{ width: 1, height: 14, background: 'linear-gradient(180deg, transparent, rgba(109,120,255,0.15), transparent)', flexShrink: 0 }} />
+
+      {/* OSOP Session — clickable ephemeral trust indicator */}
+      {osopActive && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0 }}>
+          <span style={{
+            width: 5, height: 5, borderRadius: '50%', background: '#00e676',
+            boxShadow: '0 0 6px #00e676',
+            animation: 'pulse-green 2s ease-in-out infinite',
+          }} />
+          <InfoBadge glossaryKey="OSOP" label="Einmal-Sitzung" size="xs" />
+        </div>
+      )}
+
+      {/* MFA Status — clickable TOTP indicator */}
+      {mfaEnabled && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0 }}>
+          <span style={{
+            width: 5, height: 5, borderRadius: '50%', background: 'var(--s-cyan)',
+            boxShadow: '0 0 6px var(--s-cyan)',
+          }} />
+          <InfoBadge glossaryKey="MFA" label="Zwei-Faktor" size="xs" />
+        </div>
+      )}
 
       <div style={{ width: 1, height: 14, background: 'linear-gradient(180deg, transparent, rgba(109,120,255,0.15), transparent)', flexShrink: 0 }} />
 

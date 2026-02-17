@@ -23,6 +23,27 @@ let MAX_LOG_ENTRIES = 1000; // Keep last 1000 entries
 let LOG_RETENTION_DAYS = 30; // Remove entries older than this (days)
 const CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000; // Run cleanup once per day
 
+// OSOP In-Memory Mode: when true, ALL disk I/O is disabled.
+// The logCache array operates as a pure in-memory database (DSGVO Art.5).
+// Session data never touches disk — destroyed on process exit.
+let _osopMode = false;
+
+/**
+ * Enable OSOP (One-Session-Only Protocol) mode.
+ * All activity logs remain in RAM only — zero disk writes.
+ * Called by sessionManager.ts during initSessionManager().
+ */
+export function enableOsopMode(): void {
+  _osopMode = true;
+  // Clear any pending disk writes
+  writeBuffer = [];
+  if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+}
+
+export function isOsopMode(): boolean {
+  return _osopMode;
+}
+
 // Batched async write buffer to avoid sync IO on hot paths
 const FLUSH_INTERVAL_MS = 1000; // flush every 1 second
 const MAX_WRITE_BUFFER = 50; // flush when this many entries are queued
@@ -39,6 +60,9 @@ let nextId = 1;
 export function initActivityLog() {
   // Perform async initialization — don't block app startup
   (async () => {
+    // OSOP mode: skip disk load entirely — start with empty in-memory DB
+    if (_osopMode) return;
+
     try {
       const logPath = getLogFilePath();
       if (!fs.existsSync(logPath)) return;
@@ -106,6 +130,9 @@ export function addActivityLog(
     logCache = logCache.slice(-MAX_LOG_ENTRIES);
   }
 
+  // OSOP mode: RAM-only, no disk writes
+  if (_osopMode) return;
+
   // Add to async write buffer
   writeBuffer.push(entry);
 
@@ -155,6 +182,7 @@ function scheduleFlush() {
 }
 
 async function flushBuffer() {
+  if (_osopMode) { writeBuffer = []; return; } // OSOP: never write to disk
   if (_isFlushing) return;
   if (writeBuffer.length === 0) return;
 
@@ -196,6 +224,7 @@ async function writeLogFileFromCacheAsync() {
  * Cleanup on-disk log according to retention and max entries
  */
 export async function cleanupLogs() {
+  if (_osopMode) return; // OSOP: no disk operations
   try {
     const cleanupLogPath = getLogFilePath();
     if (!fs.existsSync(cleanupLogPath)) return;

@@ -56,6 +56,14 @@ ARGUS/*.pyc
 ARGUS/.env
 ARGUS/logs/
 
+# ═══ WINDOWS SECURITY DUMPS ═══
+secedit.*
+*.jfm
+*.sdb
+
+# ═══ TEST REPORTS ═══
+tests/test-report-*.md
+
 # ═══ MISC ═══
 .cache/
 temp/

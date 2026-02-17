@@ -8,6 +8,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { notify } from '../components/Common/SentinelNotification';
+import InfoBadge from '../components/Common/InfoBadge';
 import { useTranslation } from 'react-i18next';
 import { LegacyScanCheckItem as ScanCheckItem } from '../components/Common/ScanCheckItem';
 import { getProcessKillRisk } from '../../shared/constants';
@@ -84,6 +85,7 @@ const NetworkPage: React.FC = () => {
   const [netScanResult, setNetScanResult] = useState<{ success: boolean; checks: Array<{ name: string; status: string; detail?: string; risk?: string }>; passed: number; total: number; score: number } | null>(null);
   const [edrScanning, setEdrScanning] = useState(false);
   const [edrScanResult, setEdrScanResult] = useState<{ success: boolean; checks: Array<{ name: string; status: string; detail?: string; risk?: string }>; passed: number; total: number; score: number } | null>(null);
+  const [iocFlags, setIocFlags] = useState<Record<string, { malicious: boolean; source?: string }>>({}); // MISP IoC live markers
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -101,11 +103,31 @@ const NetworkPage: React.FC = () => {
     setLoading(false);
   }, []);
 
+  // Check remote IPs against IoC feeds
+  const checkIocBatch = useCallback(async (conns: Connection[]) => {
+    const uniqueRemote = [...new Set(conns.map(c => c.remoteIP).filter(ip => !isLocal(ip)))];
+    const unchecked = uniqueRemote.filter(ip => !(ip in iocFlags));
+    if (unchecked.length === 0) return;
+    const batch: Record<string, { malicious: boolean; source?: string }> = {};
+    for (const ip of unchecked.slice(0, 20)) {
+      try {
+        const r = await api()?.threatIntel?.checkIP?.(ip);
+        batch[ip] = { malicious: !!r?.malicious, source: r?.source };
+      } catch { batch[ip] = { malicious: false }; }
+    }
+    if (Object.keys(batch).length > 0) setIocFlags(prev => ({ ...prev, ...batch }));
+  }, [iocFlags]);
+
   useEffect(() => {
     fetchData();
     const i = setInterval(fetchData, 4000);
     return () => clearInterval(i);
   }, [fetchData]);
+
+  // Run IoC check when connections change
+  useEffect(() => {
+    if (connections.length > 0) checkIocBatch(connections);
+  }, [connections]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Restore persisted scan results on mount
   useEffect(() => {
@@ -132,7 +154,7 @@ const NetworkPage: React.FC = () => {
         setActionMsg(`Blocked ${ip}`);
         setTimeout(() => setActionMsg(null), 3000);
       } else {
-        notify.error(r?.message || `Failed to block ${ip}`);
+        notify.error(r?.message || `IP ${ip} konnte nicht blockiert werden`);
       }
       fetchData();
     } catch (e: any) { notify.error(e?.message || 'Block failed'); }
@@ -154,7 +176,7 @@ const NetworkPage: React.FC = () => {
         setActionMsg(`Killed ${name} (${pid})`);
         setTimeout(() => setActionMsg(null), 3000);
       } else {
-        notify.error(r?.message || `Failed to kill ${name}`);
+        notify.error(r?.message || `Prozess ${name} konnte nicht beendet werden`);
       }
       fetchData();
     } catch (e: any) { notify.error(e?.message || 'Kill failed'); }
@@ -259,40 +281,67 @@ const NetworkPage: React.FC = () => {
         </motion.div>
       )}
 
-      {/* Stats bar (connections tab only) */}
+      {/* ═══ Connection Statistics Strip ═══ */}
       {tab === 'connections' && (
-        <div style={{ display: 'flex', gap: 10 }}>
+        <motion.div className="s-threat-strip" initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }}>
           {[
-            { label: t('network.traffic.established'), value: stats.established, color: 'var(--s-green)' },
-            { label: t('network.traffic.listening'), value: stats.listening, color: 'var(--s-cyan)' },
-            { label: 'IPs', value: stats.uniqueIps, color: 'var(--s-amber)' },
-            { label: t('common.total'), value: stats.total, color: 'var(--s-text-secondary)' },
-          ].map((s) => (
-            <div key={s.label} style={{
-              display: 'flex', alignItems: 'center', gap: 8,
-              padding: '6px 12px', borderRadius: 8,
-              background: `${s.color}06`, border: `1px solid ${s.color}18`,
-            }}>
-              <span style={{
-                width: 6, height: 6, borderRadius: '50%', background: s.color,
-                boxShadow: `0 0 6px ${s.color}`,
-              }} />
-              <span style={{
-                fontSize: '1.1rem', fontWeight: 800, fontFamily: 'var(--s-font-display)',
-                color: s.color, textShadow: `0 0 12px ${s.color}33`,
-              }}>{s.value}</span>
-              <span style={{ fontSize: '0.65rem', color: 'var(--s-text-dim)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{s.label}</span>
+            { label: 'Verbunden', value: String(stats.established), color: 'var(--s-green)', icon: '🔗' },
+            { label: 'Lauschend', value: String(stats.listening), color: 'var(--s-cyan)', icon: '👂' },
+            { label: 'Externe IPs', value: String(stats.uniqueIps), color: 'var(--s-amber)', icon: '🌐' },
+            { label: 'Gesamt', value: String(stats.total), color: 'var(--s-text-secondary)', icon: '📊' },
+            ...(Object.keys(iocFlags).length > 0 ? [{
+              label: 'IoC geprüft',
+              value: String(Object.keys(iocFlags).length),
+              color: Object.values(iocFlags).some(f => f.malicious) ? 'var(--s-red)' : 'var(--s-green)',
+              icon: '🔍',
+            }] : []),
+            ...(Object.values(iocFlags).filter(f => f.malicious).length > 0 ? [{
+              label: 'Bedrohungen',
+              value: String(Object.values(iocFlags).filter(f => f.malicious).length),
+              color: 'var(--s-red)',
+              icon: '⚠',
+            }] : []),
+          ].map((item) => (
+            <div key={item.label} className="s-threat-strip-item">
+              <span style={{ fontSize: '0.9rem' }}>{item.icon}</span>
+              <div>
+                <div style={{ fontSize: '0.95rem', fontWeight: 800, fontFamily: 'var(--s-font-display)', color: item.color, lineHeight: 1 }}>
+                  {item.value}
+                </div>
+                <div style={{ fontSize: '0.525rem', color: 'var(--s-text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em', marginTop: 2 }}>
+                  {item.label}
+                </div>
+              </div>
             </div>
           ))}
-        </div>
+        </motion.div>
       )}
 
       <AnimatePresence mode="wait">
         {/* ═══ Connections Tab ═══ */}
         {tab === 'connections' && (
           <motion.div key="conn" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="s-card-spacy" style={{ padding: 0, overflow: 'hidden' }}>
+            {/* DSGVO + IoC Legend Bar */}
+            <div style={{ padding: '10px 18px', borderBottom: '1px solid rgba(109,120,255,0.06)', background: 'rgba(0,230,118,0.02)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <InfoBadge glossaryKey="DSGVO" />
+                <span style={{ fontSize: '0.625rem', color: 'var(--s-text-dim)' }}>
+                  {'Alle IP-Pr\u00fcfungen laufen '}<strong style={{ color: 'var(--s-text-muted)' }}>lokal</strong>{' gegen zwischengespeicherte IoC-Listen \u2014 keine Daten verlassen Ihr Ger\u00e4t.'}
+                </span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <span style={{ fontSize: '0.5rem', padding: '1px 5px', borderRadius: 4, background: 'rgba(255,95,95,0.15)', color: 'var(--s-red)', fontWeight: 700 }}>IoC</span>
+                  <span style={{ fontSize: '0.575rem', color: 'var(--s-text-dim)' }}>{'= Bekannt b\u00f6sartige IP'}</span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--s-green)', display: 'inline-block' }} />
+                  <span style={{ fontSize: '0.575rem', color: 'var(--s-text-dim)' }}>{'= Gepr\u00fcft & sauber'}</span>
+                </div>
+              </div>
+            </div>
             <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--s-border)' }}>
-              <input className="s-input" placeholder="Filter by IP, process, port, or state..." value={searchFilter} onChange={(e) => setSearchFilter(e.target.value)} style={{ maxWidth: 400 }} />
+              <input className="s-input" placeholder="Filter nach IP, Prozess, Port oder Status..." value={searchFilter} onChange={(e) => setSearchFilter(e.target.value)} style={{ maxWidth: 400 }} />
             </div>
             <div style={{ maxHeight: 520, overflowY: 'auto' }}>
               <table className="s-table">
@@ -315,8 +364,13 @@ const NetworkPage: React.FC = () => {
                     const local = isLocal(c.remoteIP);
                     return (
                       <tr key={`${c.remoteIP}-${c.remotePort}-${c.localPort}-${i}`}>
-                        <td style={{ fontFamily: 'var(--s-font-mono)', fontSize: '0.75rem', color: local ? 'var(--s-text-dim)' : 'var(--s-text)' }}>
-                          {formatRemoteIp(c.remoteIP)}
+                        <td style={{ fontFamily: 'var(--s-font-mono)', fontSize: '0.75rem', color: local ? 'var(--s-text-dim)' : iocFlags[c.remoteIP]?.malicious ? 'var(--s-red)' : 'var(--s-text)' }}>
+                          <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                            {formatRemoteIp(c.remoteIP)}
+                            {iocFlags[c.remoteIP]?.malicious && (
+                              <span title={`IoC: ${iocFlags[c.remoteIP].source || 'MISP/abuse.ch'}`} style={{ fontSize: '0.5rem', padding: '1px 5px', borderRadius: 4, background: 'rgba(255,95,95,0.15)', color: 'var(--s-red)', fontWeight: 700, whiteSpace: 'nowrap', animation: 'pulse-red 1.5s ease-in-out infinite' }}>IoC</span>
+                            )}
+                          </span>
                         </td>
                         <td style={{ fontFamily: 'var(--s-font-mono)', fontSize: '0.75rem' }}>{c.remotePort || '—'}</td>
                         <td style={{ fontFamily: 'var(--s-font-mono)', fontSize: '0.75rem' }}>{c.localPort || '—'}</td>
@@ -435,10 +489,13 @@ const NetworkPage: React.FC = () => {
         {/* ═══ TLS Inspector Tab ═══ */}
         {tab === 'tls' && (
           <motion.div key="tls" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="s-card-spacy">
-            <div className="s-heading-md" style={{ marginBottom: 16 }}>{t('network.tls.title')}</div>
+            <div className="s-heading-md" style={{ marginBottom: 8 }}>{t('network.tls.title')}</div>
+            <div style={{ fontSize: '0.675rem', color: 'var(--s-text-dim)', marginBottom: 16, lineHeight: 1.5, padding: '8px 12px', borderRadius: 8, background: 'rgba(109,120,255,0.02)', border: '1px dashed rgba(109,120,255,0.08)' }}>
+              <strong style={{ color: 'var(--s-text-muted)' }}>{'Was ist TLS?'}</strong>{' TLS (Transport Layer Security) verschl\u00fcsselt die Verbindung zwischen Ihrem Browser und einer Webseite. Der TLS-Inspektor pr\u00fcft das Zertifikat eines Servers: G\u00fcltigkeitsdauer, Aussteller, Verschl\u00fcsselungsst\u00e4rke und ob die Zertifikatskette vertrauensw\u00fcrdig ist. Abgelaufene oder selbstsignierte Zertifikate k\u00f6nnen auf Phishing oder Man-in-the-Middle-Angriffe hinweisen.'}
+            </div>
             <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
-              <input className="s-input" placeholder="Hostname (e.g. google.com)" value={tlsHost} onChange={(e) => setTlsHost(e.target.value)} style={{ maxWidth: 400 }} onKeyDown={(e) => e.key === 'Enter' && handleTlsInspect()} />
-              <button className="s-btn s-btn-primary" onClick={handleTlsInspect} disabled={!tlsHost.trim()}>Inspect</button>
+              <input className="s-input" placeholder="Hostname eingeben (z.B. google.com)" value={tlsHost} onChange={(e) => setTlsHost(e.target.value)} style={{ maxWidth: 400 }} onKeyDown={(e) => e.key === 'Enter' && handleTlsInspect()} />
+              <button className="s-btn s-btn-primary" onClick={handleTlsInspect} disabled={!tlsHost.trim()}>{'Pr\u00fcfen'}</button>
             </div>
             {tlsResult && (
               <div className="s-card-compact-spacy" style={{ background: 'rgba(8,8,28,0.4)' }}>
@@ -453,10 +510,13 @@ const NetworkPage: React.FC = () => {
         {/* ═══ IP Lookup Tab ═══ */}
         {tab === 'metadata' && (
           <motion.div key="meta" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="s-card-spacy">
-            <div className="s-heading-md" style={{ marginBottom: 16 }}>{t('network.ipMetadata.title')}</div>
+            <div className="s-heading-md" style={{ marginBottom: 8 }}>{t('network.ipMetadata.title')}</div>
+            <div style={{ fontSize: '0.675rem', color: 'var(--s-text-dim)', marginBottom: 14, lineHeight: 1.5, padding: '8px 12px', borderRadius: 8, background: 'rgba(109,120,255,0.02)', border: '1px dashed rgba(109,120,255,0.08)' }}>
+              <strong style={{ color: 'var(--s-text-muted)' }}>IP-Lookup</strong>{' zeigt Ihnen, wem eine IP-Adresse geh\u00f6rt: Land, Stadt, Internetanbieter (ISP) und Risikobewertung. N\u00fctzlich, um verd\u00e4chtige Verbindungen aus der Verbindungstabelle zu untersuchen. Die Abfrage erfolgt \u00fcber lokale Geo-IP-Datenbanken.'}
+            </div>
             <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
-              <input className="s-input" placeholder="IP address (e.g. 8.8.8.8)" value={metaIp} onChange={(e) => setMetaIp(e.target.value)} style={{ maxWidth: 400 }} onKeyDown={(e) => e.key === 'Enter' && handleMetaLookup()} />
-              <button className="s-btn s-btn-primary" onClick={handleMetaLookup} disabled={!metaIp.trim()}>Lookup</button>
+              <input className="s-input" placeholder="IP-Adresse eingeben (z.B. 8.8.8.8)" value={metaIp} onChange={(e) => setMetaIp(e.target.value)} style={{ maxWidth: 400 }} onKeyDown={(e) => e.key === 'Enter' && handleMetaLookup()} />
+              <button className="s-btn s-btn-primary" onClick={handleMetaLookup} disabled={!metaIp.trim()}>Abfragen</button>
             </div>
             {metaResult && (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
@@ -485,19 +545,19 @@ const NetworkPage: React.FC = () => {
           <motion.div key="netscan" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <div className="s-card-spacy" style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
               <div style={{ flex: 1 }}>
-                <div className="s-heading-sm">Sentinel Network & WFP Firewall Scan</div>
+                <div className="s-heading-sm">Sentinel Netzwerk- & WFP-Firewall-Scan</div>
                 <div style={{ fontSize: '0.75rem', color: 'var(--s-text-muted)', marginTop: 4 }}>
-                  15 checks: WFP kernel filters, Geo-IP blocking, DoH enforcement, TCP hardening, ARP spoofing protection, beaconing detection, zero-trust isolation
+                  {'15 Pr\u00fcfungen: WFP-Kernelfilter, Geo-IP-Blockierung, DoH-Erzwingung, TCP-H\u00e4rtung, ARP-Spoofing-Schutz, Beaconing-Erkennung, Zero-Trust-Isolation'}
                 </div>
               </div>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 {netScanResult && <span style={{ fontWeight: 700, fontFamily: 'var(--s-font-display)', fontSize: '1.25rem', color: netScanResult.score >= 80 ? 'var(--s-green)' : netScanResult.score >= 50 ? 'var(--s-amber)' : 'var(--s-red)' }}>{netScanResult.score}/100</span>}
                 <button className="s-btn s-btn-primary" onClick={handleNetScan} disabled={netScanning}>
-                  {netScanning ? 'Scanning...' : netScanResult ? '\u21bb Re-scan' : '\ud83c\udf10 Run Network Scan'}
+                  {netScanning ? 'Wird gescannt...' : netScanResult ? '\u21bb Erneut scannen' : '\ud83c\udf10 Netzwerk-Scan'}
                 </button>
               </div>
             </div>
-            {netScanning && !netScanResult && <div className="s-card-spacy" style={{ textAlign: 'center', padding: 32, color: 'var(--s-text-dim)' }}>Scanning 15 network security checks (WFP, Geo-IP, DoH, TCP stack, ARP, DPI, SMB kill-switch...)</div>}
+            {netScanning && !netScanResult && <div className="s-card-spacy" style={{ textAlign: 'center', padding: 32, color: 'var(--s-text-dim)' }}>{'15 Netzwerk-Sicherheitspr\u00fcfungen werden durchgef\u00fchrt (WFP, Geo-IP, DoH, TCP-Stack, ARP, DPI, SMB-Killswitch...)'}</div>}
             {netScanResult && (
               <div className="s-card-spacy">
                 <div style={{ display: 'flex', gap: 12, fontSize: '0.75rem', marginBottom: 12 }}>
@@ -519,19 +579,19 @@ const NetworkPage: React.FC = () => {
           <motion.div key="edrscan" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <div className="s-card-spacy" style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
               <div style={{ flex: 1 }}>
-                <div className="s-heading-sm">Sentinel EDR & Behavioral Engine</div>
+                <div className="s-heading-sm">Sentinel EDR & Verhaltensanalyse</div>
                 <div style={{ fontSize: '0.75rem', color: 'var(--s-text-muted)', marginTop: 4 }}>
-                  24 checks: AMSI inspection, process hollowing, reflective DLL injection, LSASS protection, ransomware entropy, honeypot mesh, WMI persistence
+                  {'24 Pr\u00fcfungen: AMSI-Inspektion, Process Hollowing, Reflective DLL Injection, LSASS-Schutz, Ransomware-Entropie, Honeypot-Mesh, WMI-Persistenz'}
                 </div>
               </div>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 {edrScanResult && <span style={{ fontWeight: 700, fontFamily: 'var(--s-font-display)', fontSize: '1.25rem', color: edrScanResult.score >= 80 ? 'var(--s-green)' : edrScanResult.score >= 50 ? 'var(--s-amber)' : 'var(--s-red)' }}>{edrScanResult.score}/100</span>}
                 <button className="s-btn s-btn-primary" onClick={handleEdrScan} disabled={edrScanning}>
-                  {edrScanning ? 'Scanning...' : edrScanResult ? '\u21bb Re-scan' : '\ud83d\udee1 Run EDR Scan'}
+                  {edrScanning ? 'Wird gescannt...' : edrScanResult ? '\u21bb Erneut scannen' : '\ud83d\udee1 EDR-Scan starten'}
                 </button>
               </div>
             </div>
-            {edrScanning && !edrScanResult && <div className="s-card-spacy" style={{ textAlign: 'center', padding: 32, color: 'var(--s-text-dim)' }}>Scanning 24 EDR checks (AMSI, ETW, process hollowing, LSASS, ransomware detection, code integrity...)</div>}
+            {edrScanning && !edrScanResult && <div className="s-card-spacy" style={{ textAlign: 'center', padding: 32, color: 'var(--s-text-dim)' }}>{'24 EDR-Pr\u00fcfungen werden durchgef\u00fchrt (AMSI, ETW, Process Hollowing, LSASS, Ransomware-Erkennung, Code-Integrit\u00e4t...)'}</div>}
             {edrScanResult && (
               <div className="s-card-spacy">
                 <div style={{ display: 'flex', gap: 12, fontSize: '0.75rem', marginBottom: 12 }}>

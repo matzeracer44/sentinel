@@ -28,6 +28,35 @@ import { isExternalIpLookupAllowed } from '../services/sentinelConfig';
 import { killProcess as killProcessService, getSentinelRules, getBlockedIPs, IPBlockInfo } from '../services/shieldData';
 import { runPowerShellSafe } from '../services/execOptions';
 
+// ── IP Metadata Cache (saves ipinfo.io free-tier credits) ──
+const IP_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+const IP_CACHE_MAX = 500;
+const _ipMetadataCache = new Map<string, { data: any; expiresAt: number }>();
+
+function getCachedIpMetadata(ip: string): any | null {
+  const entry = _ipMetadataCache.get(ip);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) { _ipMetadataCache.delete(ip); return null; }
+  return entry.data;
+}
+
+function setCachedIpMetadata(ip: string, data: any): void {
+  if (_ipMetadataCache.size >= IP_CACHE_MAX) {
+    const oldest = _ipMetadataCache.keys().next().value;
+    if (oldest) _ipMetadataCache.delete(oldest);
+  }
+  _ipMetadataCache.set(ip, { data, expiresAt: Date.now() + IP_CACHE_TTL_MS });
+}
+
+export function getIpCacheStats(): { cachedEntries: number; maxEntries: number; ttlMs: number } {
+  // Prune expired entries
+  const now = Date.now();
+  for (const [key, entry] of _ipMetadataCache) {
+    if (now > entry.expiresAt) _ipMetadataCache.delete(key);
+  }
+  return { cachedEntries: _ipMetadataCache.size, maxEntries: IP_CACHE_MAX, ttlMs: IP_CACHE_TTL_MS };
+}
+
 
 interface SentinelFirewallRule {
   name: string;
@@ -943,6 +972,12 @@ $result | ConvertTo-Json -Depth 10
       if (!isExternalIpLookupAllowed()) {
         return { success: false, error: 'External IP lookups disabled (Datenschutz). Enable in Settings → Datenschutz.' };
       }
+
+      // Check local cache first (saves ipinfo.io free-tier credits)
+      const cached = getCachedIpMetadata(ip);
+      if (cached) {
+        return { success: true, data: cached, cached: true };
+      }
       
       const https = require('https');
       const { getApiKey } = await import('../services/shared/envLoader');
@@ -999,9 +1034,7 @@ $result | ConvertTo-Json -Depth 10
               const asMatch = org.match(/AS(\d+)/i);
               const asNumber = asMatch ? asMatch[0] : 'N/A';
               
-              resolve({
-                success: true,
-                data: {
+              const resultData = {
                   ip: parsed.ip || ip,
                   type: 'external',
                   country: parsed.country || '??',
@@ -1021,8 +1054,10 @@ $result | ConvertTo-Json -Depth 10
                   reputation: reputation,
                   riskLevel: riskLevel,
                   raw: parsed
-                }
-              });
+              };
+              // Cache result to save ipinfo.io free-tier credits
+              setCachedIpMetadata(ip, resultData);
+              resolve({ success: true, data: resultData });
               
             } catch (err: any) {
               console.error('[IP Metadata] Parse error:', err);

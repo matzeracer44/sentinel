@@ -8,6 +8,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { notify } from '../components/Common/SentinelNotification';
+import InfoBadge from '../components/Common/InfoBadge';
+import InputModal, { useInputModal } from '../components/Common/InputModal';
 import { useTranslation } from 'react-i18next';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -107,7 +109,7 @@ interface ThreatEvent {
   actionTaken?: string;
 }
 
-type Tab = 'scanner' | 'history' | 'threats' | 'playbooks';
+type Tab = 'scanner' | 'history' | 'threats' | 'playbooks' | 'yara';
 
 /** Flatten a nested object into label/value pairs for display */
 function flattenObj(obj: Record<string, unknown>, prefix = ''): { label: string; value: string; severity: 'safe' | 'warn' | 'danger' | 'info' }[] {
@@ -359,6 +361,7 @@ const IntelPage: React.FC = () => {
   const { t } = useTranslation();
   const location = useLocation();
   const navState = (location.state || {}) as { scanUrl?: string; source?: string };
+  const { showInput, showAlert, modalProps } = useInputModal();
 
   const [tab, setTab] = useState<Tab>(navState.scanUrl ? 'scanner' : 'scanner');
   const [scanUrl, setScanUrl] = useState(navState.scanUrl || '');
@@ -371,6 +374,18 @@ const IntelPage: React.FC = () => {
   const [expandedThreats, setExpandedThreats] = useState<Set<string>>(new Set());
   const [argusHealth, setArgusHealth] = useState<{ running: boolean; port: number; status?: string; lastError?: string | null; uptimeMs?: number } | null>(null);
   const [argusRestarting, setArgusRestarting] = useState(false);
+  const [yaraRules, setYaraRules] = useState<string[]>([]);
+  const [yaraMatches, setYaraMatches] = useState<any[]>([]);
+  const [yaraScanning, setYaraScanning] = useState(false);
+
+  // Auto-Triage Flow state
+  type TriageStep = 'idle' | 'upload' | 'yara' | 'ueba' | 'risk' | 'done';
+  const [triageStep, setTriageStep] = useState<TriageStep>('idle');
+  const [triageFile, setTriageFile] = useState<string | null>(null);
+  const [triageYaraResult, setTriageYaraResult] = useState<{ matches: any[]; rulesLoaded: number } | null>(null);
+  const [triageUebaResult, setTriageUebaResult] = useState<{ anomalies: any[]; trained: boolean } | null>(null);
+  const [triageRisk, setTriageRisk] = useState<{ level: 'SAFE' | 'SUSPICIOUS' | 'DANGEROUS'; score: number; reasons: string[] } | null>(null);
+  const [triageError, setTriageError] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
     try {
@@ -468,11 +483,117 @@ const IntelPage: React.FC = () => {
 
   const detailSections = scanResult ? buildDetailSections(scanResult, t) : [];
 
+  const handleAutoTriage = async () => {
+    setTriageStep('upload');
+    setTriageFile(null);
+    setTriageYaraResult(null);
+    setTriageUebaResult(null);
+    setTriageRisk(null);
+    setTriageError(null);
+    try {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.onchange = async () => {
+        if (!input.files?.length) { setTriageStep('idle'); return; }
+        const filePath = (input.files[0] as any).path;
+        const fileName = input.files[0].name;
+        if (!filePath) { setTriageError('Dateipfad nicht zugänglich'); setTriageStep('idle'); return; }
+        setTriageFile(fileName);
+
+        // Step 1: YARA Scan
+        setTriageStep('yara');
+        let yaraRes: { matches: any[]; rulesLoaded: number } = { matches: [], rulesLoaded: 0 };
+        try {
+          const r = await api()?.yara?.scanFile?.(filePath);
+          if (r?.success) {
+            yaraRes = { matches: r.matches || [], rulesLoaded: r.rules_loaded || 0 };
+            setTriageYaraResult(yaraRes);
+          } else {
+            yaraRes = { matches: [], rulesLoaded: 0 };
+            setTriageYaraResult(yaraRes);
+          }
+        } catch { setTriageYaraResult({ matches: [], rulesLoaded: 0 }); }
+
+        // Step 2: UEBA Behavioral Analysis
+        setTriageStep('ueba');
+        let uebaRes: { anomalies: any[]; trained: boolean } = { anomalies: [], trained: false };
+        try {
+          const status = await api()?.ueba?.status?.();
+          uebaRes.trained = !!status?.trained;
+          if (status?.trained) {
+            const detect = await api()?.ueba?.detect?.({ filename: fileName, path: filePath });
+            if (detect?.anomalies) uebaRes.anomalies = detect.anomalies;
+          }
+          setTriageUebaResult(uebaRes);
+        } catch { setTriageUebaResult(uebaRes); }
+
+        // Step 3: Risk Assessment
+        setTriageStep('risk');
+        const reasons: string[] = [];
+        let score = 0;
+        if (yaraRes.matches.length > 0) {
+          score += 40 + Math.min(yaraRes.matches.length * 10, 30);
+          reasons.push(`${yaraRes.matches.length} YARA-Signatur(en) erkannt`);
+        }
+        if (uebaRes.anomalies.length > 0) {
+          score += 20 + Math.min(uebaRes.anomalies.length * 5, 20);
+          reasons.push(`${uebaRes.anomalies.length} Verhaltensanomalie(n) erkannt`);
+        }
+        if (!uebaRes.trained) {
+          reasons.push('UEBA-Baseline nicht trainiert — Verhaltensanalyse eingeschränkt');
+        }
+        if (yaraRes.matches.length === 0 && uebaRes.anomalies.length === 0) {
+          reasons.push('Keine bekannten Signaturen oder Anomalien erkannt');
+        }
+        const level: 'SAFE' | 'SUSPICIOUS' | 'DANGEROUS' = score >= 60 ? 'DANGEROUS' : score >= 20 ? 'SUSPICIOUS' : 'SAFE';
+        setTriageRisk({ level, score: Math.min(score, 100), reasons });
+        setTriageStep('done');
+
+        // Also update standalone YARA state
+        setYaraMatches(yaraRes.matches);
+      };
+      input.click();
+    } catch (e: any) {
+      setTriageError(e?.message || 'Auto-Triage fehlgeschlagen');
+      setTriageStep('idle');
+    }
+  };
+
+  const handleYaraScanFile = async () => {
+    setYaraScanning(true);
+    setYaraMatches([]);
+    try {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.onchange = async () => {
+        if (!input.files?.length) { setYaraScanning(false); return; }
+        const filePath = (input.files[0] as any).path;
+        if (!filePath) { notify.error('File path not accessible'); setYaraScanning(false); return; }
+        const r = await api()?.yara?.scanFile?.(filePath);
+        if (r?.success) {
+          setYaraMatches(r.matches || []);
+          if (r.matches?.length) notify.warning(`${r.matches.length} YARA match(es) found!`);
+          else notify.success(`Clean — 0 matches (${r.rules_loaded || 0} rules checked)`);
+        } else { notify.error(r?.error || 'YARA scan failed'); }
+        setYaraScanning(false);
+      };
+      input.click();
+    } catch (e: any) { notify.error(e?.message || 'YARA scan failed'); setYaraScanning(false); }
+  };
+
+  const fetchYaraRules = async () => {
+    try {
+      const r = await api()?.yara?.listRules?.();
+      if (r?.rules) setYaraRules(r.rules);
+    } catch { /* ok */ }
+  };
+
   const TABS: { key: Tab; labelKey: string; count?: number }[] = [
     { key: 'scanner', labelKey: 'intel.tabs.scanner' },
     { key: 'history', labelKey: 'intel.tabs.history', count: history.length },
     { key: 'threats', labelKey: 'intel.tabs.threats', count: threats.length },
     { key: 'playbooks', labelKey: 'intel.tabs.playbooks' },
+    { key: 'yara', labelKey: 'YARA Scan', count: yaraRules.length || undefined },
   ];
 
   return (
@@ -535,10 +656,10 @@ const IntelPage: React.FC = () => {
                   </div>
                   <div style={{ flex: 1 }}>
                     <div style={{ fontWeight: 700, fontSize: '1rem', color: 'var(--s-red)', marginBottom: 4 }}>
-                      {t('intel.argus.offline')}
+                      ARGUS Backend Offline
                     </div>
                     <div style={{ fontSize: '0.8125rem', color: 'var(--s-text-muted)', lineHeight: 1.6 }}>
-                      {t('vault.argusEncryption.noArgus')}
+                      {'Das ARGUS-Backend ist nicht erreichbar. URL-Scanning und Bedrohungsanalyse ben\u00f6tigen ein laufendes Backend.'}
                     </div>
                     {argusHealth.lastError && (
                       <div style={{ fontSize: '0.75rem', color: 'var(--s-red)', marginTop: 6, fontFamily: 'var(--s-font-mono)', padding: '4px 8px', background: 'rgba(255,95,95,0.06)', borderRadius: 6, border: '1px solid rgba(255,95,95,0.15)' }}>
@@ -553,17 +674,19 @@ const IntelPage: React.FC = () => {
                       >
                         {argusRestarting ? t('intel.argus.starting') : `▶ ${t('intel.argus.start')}`}
                       </button>
-                      <button className="s-btn s-btn-ghost s-btn-sm" onClick={fetchData}>↻ {t('common.retry')}</button>
+                      <button className="s-btn s-btn-ghost s-btn-sm" onClick={fetchData}>{'↻ Erneut pr\u00fcfen'}</button>
                     </div>
-                    <div style={{ marginTop: 14, padding: '10px 12px', background: 'rgba(109,120,255,0.04)', borderRadius: 8, border: '1px solid rgba(109,120,255,0.08)' }}>
-                      <div style={{ fontSize: '0.6875rem', fontWeight: 600, color: 'var(--s-text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>
-                        Available while offline
-                      </div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: '0.75rem', color: 'var(--s-text-muted)' }}>
-                        <span>• View previous scan history in the History tab</span>
-                        <span>• Review recorded threat events in the Timeline tab</span>
-                        <span>• Shield firewall and network monitoring remain active</span>
-                        <span>• Local security scans run independently of ARGUS</span>
+                    <div className="s-callout s-callout-info" style={{ marginTop: 14 }}>
+                      <div>
+                        <div style={{ fontSize: '0.6875rem', fontWeight: 600, color: 'var(--s-text-secondary)', marginBottom: 6 }}>
+                          {'Verf\u00fcgbar im Offline-Modus'}
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: '0.725rem', color: 'var(--s-text-muted)' }}>
+                          <span>{'• Bisherige Scan-Ergebnisse im Verlauf-Tab einsehen'}</span>
+                          <span>{'• Aufgezeichnete Bedrohungen in der Zeitleiste pr\u00fcfen'}</span>
+                          <span>{'• Firewall- und Netzwerk\u00fcberwachung bleiben aktiv'}</span>
+                          <span>{'• Lokale Sicherheitsscans laufen unabh\u00e4ngig von ARGUS'}</span>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -571,25 +694,69 @@ const IntelPage: React.FC = () => {
               </div>
             )}
 
-            <div className="s-card-spacy">
-              <div className="s-heading-md" style={{ marginBottom: 16 }}>{t('intel.scanner.title')}</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div className="s-card-spacy s-gradient-border">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18 }}>
+                <div style={{
+                  width: 40, height: 40, borderRadius: 10,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  background: 'rgba(60,240,255,0.08)', border: '1px solid rgba(60,240,255,0.2)',
+                  fontSize: 18,
+                }}>
+                  🔍
+                </div>
+                <div>
+                  <div className="s-heading-md">{t('intel.scanner.title')}</div>
+                  <div style={{ fontSize: '0.675rem', color: 'var(--s-text-dim)', marginTop: 1 }}>
+                    {'URL-Analyse mit ARGUS \u2014 Passive & Tiefe Analyse'}
+                  </div>
+                </div>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
                 <textarea
-                  className="s-input"
+                  className="s-input-spacy"
                   placeholder={t('intel.scanner.urlPlaceholder')}
                   value={scanUrl}
                   onChange={(e) => setScanUrl(e.target.value)}
                   rows={3}
-                  style={{ resize: 'vertical', minHeight: 48 }}
+                  style={{ resize: 'vertical', minHeight: 48, fontFamily: 'var(--s-font-mono)', fontSize: '0.8rem' }}
                   onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleScan(); } }}
                 />
-                <div style={{ display: 'flex', gap: 8 }}>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
                   <button className="s-btn s-btn-primary" onClick={() => handleScan()} disabled={scanning || !scanUrl.trim() || (argusHealth !== null && !argusHealth.running)}>
-                    {scanning ? t('intel.scanner.scanning') : argusHealth && !argusHealth.running ? t('intel.argus.offline') : t('intel.scanner.scan')}
+                    {scanning ? t('intel.scanner.scanning') : argusHealth && !argusHealth.running ? t('intel.argus.offline') : `⚡ ${t('intel.scanner.scan')}`}
                   </button>
                   <button className="s-btn s-btn-ghost" onClick={handleBatchScan} disabled={scanning || !scanUrl.trim() || (argusHealth !== null && !argusHealth.running)}>
-                    {t('intel.scanner.batchScan')}
+                    {'📋 '}{t('intel.scanner.batchScan')}
                   </button>
+                  <button className="s-btn s-btn-ghost" onClick={handleDeepScan} disabled={deepScanning || !scanUrl.trim() || (argusHealth !== null && !argusHealth.running)}>
+                    {deepScanning ? 'Tiefe Analyse...' : '\ud83d\udd0d Tiefe Analyse'}
+                  </button>
+                  <div style={{ marginLeft: 'auto', fontSize: '0.575rem', color: 'var(--s-text-dim)' }}>
+                    Enter = Scan · Shift+Enter = Neue Zeile
+                  </div>
+                </div>
+                {/* Risk Level Legend */}
+                <div style={{
+                  display: 'flex', gap: 0, borderRadius: 8, overflow: 'hidden',
+                  border: '1px solid rgba(109,120,255,0.08)', marginTop: 2,
+                }}>
+                  {[
+                    { color: 'var(--s-green)', bg: 'rgba(61,255,143,0.04)', label: 'SICHER', desc: 'Keine Bedrohung' },
+                    { color: 'var(--s-amber)', bg: 'rgba(255,190,61,0.04)', label: 'VERDÄCHTIG', desc: 'Prüfung empfohlen' },
+                    { color: 'var(--s-red)', bg: 'rgba(255,95,95,0.04)', label: 'GEFÄHRLICH', desc: 'Bekannte Bedrohung' },
+                  ].map((l, i) => (
+                    <div key={l.label} style={{
+                      flex: 1, display: 'flex', alignItems: 'center', gap: 8,
+                      padding: '8px 12px', background: l.bg,
+                      borderRight: i < 2 ? '1px solid rgba(109,120,255,0.08)' : 'none',
+                    }}>
+                      <span style={{ width: 8, height: 8, borderRadius: '50%', background: l.color, boxShadow: `0 0 6px ${l.color}`, flexShrink: 0 }} />
+                      <div>
+                        <div style={{ fontSize: '0.6rem', fontWeight: 700, color: l.color }}>{l.label}</div>
+                        <div style={{ fontSize: '0.525rem', color: 'var(--s-text-dim)' }}>{l.desc}</div>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
             </div>
@@ -858,7 +1025,219 @@ const IntelPage: React.FC = () => {
             </div>
           </motion.div>
         )}
+
+        {/* ═══ YARA Scan Tab ═══ */}
+        {tab === 'yara' && (
+          <motion.div key="yara" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            {/* DSGVO + Privacy Info Banner */}
+            <div style={{ padding: '10px 16px', borderRadius: 10, background: 'rgba(0,230,118,0.04)', border: '1px solid rgba(0,230,118,0.12)', display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                <InfoBadge glossaryKey="DSGVO Art.5" />
+                <InfoBadge glossaryKey="LOKAL" />
+              </div>
+              <span style={{ fontSize: '0.675rem', color: 'var(--s-text-muted)', lineHeight: 1.4 }}>
+                Alle Scans laufen <strong style={{ color: 'var(--s-text-secondary)' }}>100% lokal</strong> auf Ihrem Gerät. Keine Dateien oder Hashes werden an externe Server gesendet. YARA-Regeln und IoC-Datenbanken werden lokal zwischengespeichert.
+              </span>
+            </div>
+
+            {/* ═══ Auto-Triage Flow Pipeline ═══ */}
+            <div className="s-card-spacy" style={{ borderColor: triageStep !== 'idle' ? 'rgba(60,240,255,0.2)' : undefined }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span style={{ fontWeight: 700, fontSize: '0.9rem', fontFamily: 'var(--s-font-display)', background: 'linear-gradient(90deg, var(--s-cyan), var(--s-purple), var(--s-red))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>Auto-Triage Pipeline</span>
+                  <InfoBadge glossaryKey="KI-GEST\u00dcTZT" />
+                </div>
+                <button className="s-btn s-btn-primary s-btn-sm" onClick={handleAutoTriage} disabled={triageStep !== 'idle' && triageStep !== 'done'} style={{ borderRadius: 8 }}>
+                  {triageStep !== 'idle' && triageStep !== 'done' ? 'Analyse l\u00e4uft...' : '\u26a1 Datei analysieren'}
+                </button>
+              </div>
+              {/* Beginner explanation */}
+              <div style={{ fontSize: '0.65rem', color: 'var(--s-text-dim)', marginBottom: 14, lineHeight: 1.5, padding: '6px 10px', borderRadius: 6, background: 'rgba(109,120,255,0.02)', border: '1px dashed rgba(109,120,255,0.06)' }}>
+                <strong style={{ color: 'var(--s-text-muted)' }}>Automatische Bedrohungsanalyse:</strong>{' Wählen Sie eine Datei und Sentinel führt automatisch 4 Prüfschritte durch: Datei-Upload → YARA-Signaturprüfung → KI-Verhaltensanalyse (UEBA) → Risikobewertung. Alles lokal, ohne Cloud.'}
+              </div>
+              {/* Pipeline Steps */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 0, marginBottom: triageStep !== 'idle' ? 16 : 0 }}>
+                {([
+                  { key: 'upload', label: 'Datei-Upload', icon: '\ud83d\udcc1' },
+                  { key: 'yara', label: 'YARA-Scan', icon: '\ud83d\udd2c' },
+                  { key: 'ueba', label: 'UEBA-Analyse', icon: '\ud83e\udde0' },
+                  { key: 'risk', label: 'Risikobewertung', icon: '\ud83c\udfaf' },
+                ] as const).map((step, i, arr) => {
+                  const steps: TriageStep[] = ['upload', 'yara', 'ueba', 'risk'];
+                  const stepIdx = steps.indexOf(step.key);
+                  const currentIdx = steps.indexOf(triageStep === 'done' ? 'risk' : triageStep);
+                  const isActive = triageStep === step.key;
+                  const isDone = triageStep === 'done' || (currentIdx > stepIdx && triageStep !== 'idle');
+                  const isPending = currentIdx < stepIdx && triageStep !== 'idle';
+                  return (
+                    <React.Fragment key={step.key}>
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, flex: 1, opacity: triageStep === 'idle' ? 0.4 : isPending ? 0.35 : 1, transition: 'opacity 0.3s' }}>
+                        <div style={{
+                          width: 36, height: 36, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16,
+                          background: isDone ? 'rgba(61,255,143,0.1)' : isActive ? 'rgba(60,240,255,0.1)' : 'rgba(109,120,255,0.04)',
+                          border: `1.5px solid ${isDone ? 'rgba(61,255,143,0.3)' : isActive ? 'rgba(60,240,255,0.4)' : 'rgba(109,120,255,0.1)'}`,
+                          boxShadow: isActive ? '0 0 12px rgba(60,240,255,0.15)' : isDone ? '0 0 8px rgba(61,255,143,0.1)' : 'none',
+                          transition: 'all 0.3s',
+                        }}>
+                          {isDone ? '\u2713' : step.icon}
+                        </div>
+                        <span style={{ fontSize: '0.6rem', fontWeight: isActive ? 700 : 500, color: isDone ? 'var(--s-green)' : isActive ? 'var(--s-cyan)' : 'var(--s-text-dim)', transition: 'color 0.3s' }}>{step.label}</span>
+                      </div>
+                      {i < arr.length - 1 && (
+                        <div style={{ width: 40, height: 2, borderRadius: 1, flexShrink: 0, background: isDone ? 'var(--s-green)' : 'rgba(109,120,255,0.1)', transition: 'background 0.3s', marginBottom: 16 }} />
+                      )}
+                    </React.Fragment>
+                  );
+                })}
+              </div>
+              {/* Triage Result */}
+              {triageStep === 'done' && triageRisk && (
+                <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} style={{
+                  padding: '12px 16px', borderRadius: 10,
+                  background: triageRisk.level === 'DANGEROUS' ? 'rgba(255,95,95,0.06)' : triageRisk.level === 'SUSPICIOUS' ? 'rgba(255,190,61,0.06)' : 'rgba(61,255,143,0.06)',
+                  border: `1px solid ${triageRisk.level === 'DANGEROUS' ? 'rgba(255,95,95,0.2)' : triageRisk.level === 'SUSPICIOUS' ? 'rgba(255,190,61,0.2)' : 'rgba(61,255,143,0.2)'}`,
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ fontSize: '1.1rem' }}>{triageRisk.level === 'DANGEROUS' ? '\ud83d\udd34' : triageRisk.level === 'SUSPICIOUS' ? '\ud83d\udfe1' : '\ud83d\udfe2'}</span>
+                      <span style={{ fontWeight: 700, fontSize: '0.9rem', color: triageRisk.level === 'DANGEROUS' ? 'var(--s-red)' : triageRisk.level === 'SUSPICIOUS' ? 'var(--s-amber)' : 'var(--s-green)' }}>{triageRisk.level}</span>
+                      {triageFile && <span style={{ fontSize: '0.7rem', color: 'var(--s-text-dim)', fontFamily: 'var(--s-font-mono)' }}>{triageFile}</span>}
+                    </div>
+                    <span style={{ fontSize: '1rem', fontWeight: 800, fontFamily: 'var(--s-font-display)', color: triageRisk.level === 'DANGEROUS' ? 'var(--s-red)' : triageRisk.level === 'SUSPICIOUS' ? 'var(--s-amber)' : 'var(--s-green)' }}>{triageRisk.score}/100</span>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
+                    <span style={{ fontSize: '0.55rem', padding: '2px 7px', borderRadius: 4, background: 'rgba(109,120,255,0.06)', color: 'var(--s-text-dim)' }}>YARA: {triageYaraResult?.matches.length || 0} Treffer / {triageYaraResult?.rulesLoaded || 0} Regeln</span>
+                    <span style={{ fontSize: '0.55rem', padding: '2px 7px', borderRadius: 4, background: 'rgba(109,120,255,0.06)', color: 'var(--s-text-dim)' }}>UEBA: {triageUebaResult?.trained ? `${triageUebaResult.anomalies.length} Anomalien` : 'Nicht trainiert'}</span>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    {triageRisk.reasons.map((r, i) => (
+                      <div key={i} style={{ fontSize: '0.675rem', color: 'var(--s-text-muted)' }}>{'\u2192'} {r}</div>
+                    ))}
+                  </div>
+                </motion.div>
+              )}
+              {triageError && <div style={{ fontSize: '0.75rem', color: 'var(--s-red)', marginTop: 8 }}>{triageError}</div>}
+            </div>
+
+            {/* YARA Scanner Card */}
+            <div className="s-card-spacy">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+                <span style={{ fontWeight: 700, fontSize: '0.9rem', fontFamily: 'var(--s-font-display)', background: 'linear-gradient(90deg, var(--s-red), var(--s-amber))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>YARA Signature Scanner</span>
+                <InfoBadge glossaryKey="ARGUS" />
+              </div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--s-text-muted)', marginBottom: 6, lineHeight: 1.6 }}>
+                Scan files against local YARA rules — detect malware signatures, suspicious patterns, and ransomware indicators without external API calls.
+              </div>
+              {/* Beginner explanation */}
+              <div style={{ fontSize: '0.675rem', color: 'var(--s-text-dim)', marginBottom: 14, lineHeight: 1.5, padding: '8px 12px', borderRadius: 8, background: 'rgba(109,120,255,0.02)', border: '1px dashed rgba(109,120,255,0.08)' }}>
+                <strong style={{ color: 'var(--s-text-muted)' }}>Was ist YARA?</strong> YARA ist ein branchenführendes Tool zur Erkennung von Schadsoftware. Es prüft Dateien auf bekannte Malware-Muster (Signaturen), ähnlich wie ein Virenscanner — aber völlig offline und kostenlos. Klicken Sie auf "Scan File", um eine verdächtige Datei zu prüfen.
+              </div>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 16 }}>
+                <button className="s-btn s-btn-primary" onClick={handleYaraScanFile} disabled={yaraScanning} title="Wählen Sie eine Datei aus, die auf Malware-Signaturen geprüft werden soll">
+                  {yaraScanning ? 'Wird gescannt...' : '\ud83d\udd2c Datei mit YARA scannen'}
+                </button>
+                <button className="s-btn s-btn-ghost" onClick={fetchYaraRules} title="Zeigt alle geladenen YARA-Regeln an (aus ARGUS/data/yara_rules/)">
+                  {'\u21bb Regeln laden'}
+                </button>
+                <button className="s-btn s-btn-ghost s-btn-sm" onClick={async () => {
+                  try {
+                    const r = await api()?.ueba?.status?.();
+                    if (r?.trained) notify.info(`UEBA Baseline: ${r.connection_patterns} Muster, ${r.known_processes} Prozesse (Stand: ${r.updated_at})`);
+                    else notify.warning('UEBA noch nicht trainiert — nutzen Sie den Netzwerk-Monitor, um eine Baseline aufzubauen');
+                  } catch (e: any) { notify.error(e?.message || 'Error'); }
+                }} title="UEBA (User and Entity Behavior Analytics) lernt normales Verhalten und erkennt Anomalien">
+                  {'\ud83e\udde0'} UEBA Status
+                </button>
+              </div>
+              {yaraRules.length > 0 && (
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--s-text-secondary)', marginBottom: 6 }}>Geladene Regeln ({yaraRules.length})</div>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {yaraRules.map((r) => (
+                      <span key={r} style={{ fontSize: '0.6rem', padding: '3px 8px', borderRadius: 6, background: 'rgba(109,120,255,0.06)', border: '1px solid rgba(109,120,255,0.12)', color: 'var(--s-text-secondary)' }}>{r}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {yaraMatches.length > 0 && (
+                <div>
+                  <div style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--s-red)', marginBottom: 6 }}>{'\u26a0'} Treffer gefunden ({yaraMatches.length})</div>
+                  <div style={{ fontSize: '0.65rem', color: 'var(--s-text-muted)', marginBottom: 8 }}>
+                    Die folgenden YARA-Regeln haben Treffer in der gescannten Datei gefunden. Ein Treffer bedeutet, dass die Datei bekannte Malware-Muster enthält und genauer untersucht werden sollte.
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {yaraMatches.map((m: any, i: number) => (
+                      <div key={i} style={{ padding: '8px 12px', borderRadius: 8, background: 'rgba(255,95,95,0.06)', border: '1px solid rgba(255,95,95,0.15)' }}>
+                        <div style={{ fontWeight: 600, fontSize: '0.8125rem', color: 'var(--s-red)' }}>{m.rule || m}</div>
+                        {m.meta && <div style={{ fontSize: '0.65rem', color: 'var(--s-text-muted)', marginTop: 2 }}>{JSON.stringify(m.meta)}</div>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {yaraMatches.length === 0 && !yaraScanning && (
+                <div style={{ textAlign: 'center', padding: '24px 16px', color: 'var(--s-text-dim)' }}>
+                  <div style={{ fontSize: '1.5rem', marginBottom: 8, opacity: 0.4 }}>{'\ud83d\udd2c'}</div>
+                  <div style={{ fontSize: '0.8125rem', marginBottom: 4 }}>Bereit zum Scannen</div>
+                  <div style={{ fontSize: '0.7rem', maxWidth: 360, margin: '0 auto', lineHeight: 1.5 }}>
+                    Klicken Sie auf "Scan File with YARA", um eine Datei gegen alle geladenen Malware-Signaturen zu prüfen. Das Ergebnis erscheint hier.
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* MISP / IoC Quick Check */}
+            <div className="s-card-spacy">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+                <span style={{ fontWeight: 700, fontSize: '0.9rem', fontFamily: 'var(--s-font-display)', background: 'linear-gradient(90deg, var(--s-cyan), var(--s-green))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>Threat Intelligence (MISP/abuse.ch)</span>
+                <InfoBadge glossaryKey="KOSTENLOS" />
+              </div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--s-text-muted)', marginBottom: 6, lineHeight: 1.6 }}>
+                Kostenlose IoC-Feeds (Indicators of Compromise), die lokal zwischengespeichert werden — IP-Blocklisten, Malware-Hashes und Domain-Indikatoren. Automatische Aktualisierung alle 6 Stunden.
+              </div>
+              {/* Beginner explanation */}
+              <div style={{ fontSize: '0.675rem', color: 'var(--s-text-dim)', marginBottom: 14, lineHeight: 1.5, padding: '8px 12px', borderRadius: 8, background: 'rgba(109,120,255,0.02)', border: '1px dashed rgba(109,120,255,0.08)' }}>
+                <strong style={{ color: 'var(--s-text-muted)' }}>Was sind IoC-Feeds?</strong> IoCs (Indicators of Compromise) sind bekannte bösartige IP-Adressen, Datei-Hashes und Domains, die von Sicherheitsforschern weltweit gesammelt werden (z.B. abuse.ch, Feodo Tracker). Sentinel lädt diese Listen herunter und prüft Ihre Netzwerkverbindungen automatisch dagegen — ganz ohne API-Kosten. Im Netzwerk-Monitor sehen Sie bei jeder Verbindung ein rotes "IoC"-Badge, wenn die Gegenstelle bekannt bösartig ist.
+              </div>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button className="s-btn s-btn-ghost s-btn-sm" title="Lädt die neuesten IoC-Listen von abuse.ch und anderen Quellen herunter" onClick={async () => {
+                  try {
+                    notify.info('IoC-Feeds werden aktualisiert...');
+                    const r = await api()?.threatIntel?.refresh?.();
+                    if (r?.success) notify.success(`${r.ips} IPs, ${r.hashes} Hashes geladen`);
+                    else notify.error(r?.error || 'Aktualisierung fehlgeschlagen');
+                  } catch (e: any) { notify.error(e?.message || 'Error'); }
+                }}>{'\u21bb'} Feeds aktualisieren</button>
+                <button className="s-btn s-btn-ghost s-btn-sm" title="Zeigt an, wie viele IoCs aktuell in der lokalen Datenbank gespeichert sind" onClick={async () => {
+                  try {
+                    const r = await api()?.threatIntel?.getStats?.();
+                    notify.info(`IoC-Datenbank: ${r?.ips || 0} IPs, ${r?.hashes || 0} Hashes — Letzte Aktualisierung: ${r?.lastUpdate || 'nie'}`);
+                  } catch (e: any) { notify.error(e?.message || 'Error'); }
+                }}>Statistik anzeigen</button>
+                <button className="s-btn s-btn-ghost s-btn-sm" title="Pr\u00fcfen Sie manuell, ob eine IP-Adresse in der IoC-Datenbank als b\u00f6sartig bekannt ist" onClick={async () => {
+                  const ip = await showInput({ title: 'IP-Adresse pr\u00fcfen', message: 'Geben Sie eine IP-Adresse ein, die gegen die lokale IoC-Datenbank gepr\u00fcft werden soll.', placeholder: 'z.B. 185.220.101.1', variant: 'info', confirmLabel: 'Pr\u00fcfen' });
+                  if (!ip) return;
+                  try {
+                    const r = await api()?.threatIntel?.checkIP?.(ip);
+                    if (r?.malicious) notify.error(`B\u00d6SARTIG: ${ip} gefunden in ${r.source}`);
+                    else notify.success(`SAUBER: ${ip} nicht in IoC-Feeds gefunden`);
+                  } catch (e: any) { notify.error(e?.message || 'Error'); }
+                }}>{'IP pr\u00fcfen'}</button>
+                <button className="s-btn s-btn-ghost s-btn-sm" title="Pr\u00fcfen Sie, ob ein Datei-Hash (MD5 oder SHA256) als Malware bekannt ist" onClick={async () => {
+                  const hash = await showInput({ title: 'Datei-Hash pr\u00fcfen', message: 'Geben Sie einen Datei-Hash (MD5 oder SHA256) ein, um ihn gegen die IoC-Datenbank zu pr\u00fcfen.', placeholder: 'MD5 oder SHA256 Hash\u2026', variant: 'info', confirmLabel: 'Pr\u00fcfen' });
+                  if (!hash) return;
+                  try {
+                    const r = await api()?.threatIntel?.checkHash?.(hash);
+                    if (r?.malicious) notify.error(`B\u00d6SARTIG: Hash gefunden in ${r.source}`);
+                    else notify.success('SAUBER: Hash nicht in IoC-Feeds');
+                  } catch (e: any) { notify.error(e?.message || 'Error'); }
+                }}>{'Hash pr\u00fcfen'}</button>
+              </div>
+            </div>
+          </motion.div>
+        )}
       </AnimatePresence>
+      <InputModal {...modalProps} />
     </div>
   );
 };

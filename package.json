@@ -1,6 +1,6 @@
 {
   "name": "sentinel",
-  "version": "3.4.0",
+  "version": "3.5.0",
   "description": "All-in-One Windows Security & Performance Suite",
   "main": "dist/main/main.js",
   "author": "Sentinel Team",
@@ -13,7 +13,8 @@
     "dev": "npm run build && npm start",
     "dev:watch": "webpack --config webpack.main.config.js --watch & webpack --config webpack.renderer.config.js --watch",
     "serve": "webpack serve --config webpack.renderer.config.js --port 3000",
-    "native:rebuild": "npx @electron/rebuild -f -w better-sqlite3 classic-level"
+    "native:rebuild": "npx @electron/rebuild -f -w better-sqlite3 classic-level",
+    "test:security": "npx ts-node --project tests/tsconfig.json tests/security/run-all.ts"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.0.0",

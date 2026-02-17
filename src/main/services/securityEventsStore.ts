@@ -292,6 +292,10 @@ export function getRecentSecurityEvents(limit = 50, pid?: number): StoredSecurit
   }));
 }
 
+export function queryAllSecurityEvents(limit = 10000): StoredSecurityEvent[] {
+  return getRecentSecurityEvents(limit);
+}
+
 export function shutdownSecurityEvents(): void {
   flushBuffer();
   if (flushTimer) {

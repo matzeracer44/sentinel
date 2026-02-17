@@ -8,6 +8,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { notify } from '../components/Common/SentinelNotification';
+import InfoBadge from '../components/Common/InfoBadge';
 import { useTranslation } from 'react-i18next';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -143,6 +144,9 @@ const FirewallPage: React.FC = () => {
   const [blockPid, setBlockPid] = useState('');
   const [blockResult, setBlockResult] = useState<{ success: boolean; message: string } | null>(null);
 
+  // Adaptive Access / Kill-Switch state
+  const [adaptiveState, setAdaptiveState] = useState<{ enabled: boolean; restricted: boolean; lastHealthScore: number | null; lastCheckAt: string | null } | null>(null);
+
   // ─── Data fetching ───
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -164,6 +168,11 @@ const FirewallPage: React.FC = () => {
       if (a?.shield?.getSentinelRules) {
         const sr = await a.shield.getSentinelRules();
         if (sr?.rules) setSentinelRules(sr.rules);
+      }
+      // Fetch adaptive access state
+      if (a?.adaptive?.getState) {
+        const st = await a.adaptive.getState();
+        if (st) setAdaptiveState(st as any);
       }
     } catch (e: any) { console.warn('[FirewallPage] fetchData:', e?.message); }
     setLoading(false);
@@ -305,6 +314,118 @@ const FirewallPage: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      {/* ═══ Rule Statistics Strip ═══ */}
+      <motion.div
+        className="s-threat-strip"
+        initial={{ opacity: 0, y: -6 }}
+        animate={{ opacity: 1, y: 0 }}
+      >
+        {[
+          { label: 'Regeln gesamt', value: String(rules.length), color: 'var(--s-cyan)', icon: '📋' },
+          { label: 'Eingehend', value: String(ruleStats.inbound), color: 'var(--s-cyan)', icon: '⬇' },
+          { label: 'Ausgehend', value: String(ruleStats.outbound), color: 'var(--s-purple)', icon: '⬆' },
+          { label: 'Blockiert', value: String(ruleStats.blocked), color: 'var(--s-red)', icon: '🚫' },
+          { label: 'Deaktiviert', value: String(ruleStats.disabled), color: 'var(--s-amber)', icon: '⏸' },
+          { label: 'Sentinel', value: String(sentinelRules.length), color: 'var(--s-green)', icon: '🛡' },
+        ].map((item) => (
+          <div key={item.label} className="s-threat-strip-item">
+            <span style={{ fontSize: '0.9rem' }}>{item.icon}</span>
+            <div>
+              <div style={{ fontSize: '0.95rem', fontWeight: 800, fontFamily: 'var(--s-font-display)', color: item.color, lineHeight: 1 }}>
+                {item.value}
+              </div>
+              <div style={{ fontSize: '0.525rem', color: 'var(--s-text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em', marginTop: 2 }}>
+                {item.label}
+              </div>
+            </div>
+          </div>
+        ))}
+      </motion.div>
+
+      {/* ═══ Adaptive Access / Kill-Switch ═══ */}
+      {adaptiveState && (
+        <motion.div
+          initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}
+          className={adaptiveState.restricted ? 's-callout s-callout-danger' : 's-callout s-callout-success'}
+          style={{
+            padding: '14px 18px', borderRadius: 12,
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{
+              width: 40, height: 40, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: adaptiveState.restricted ? 'rgba(255,95,95,0.12)' : 'rgba(61,255,143,0.1)',
+              border: `1px solid ${adaptiveState.restricted ? 'rgba(255,95,95,0.2)' : 'rgba(61,255,143,0.15)'}`,
+              fontSize: '1.1rem',
+            }}>
+              {adaptiveState.restricted ? '🚨' : '🛡'}
+            </div>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontWeight: 700, fontSize: '0.85rem', color: adaptiveState.restricted ? 'var(--s-red)' : 'var(--s-green)' }}>
+                  {adaptiveState.restricted ? 'NETZWERK ISOLIERT' : 'Adaptiver Zugriffsschutz'}
+                </span>
+                <InfoBadge glossaryKey="DSGVO Art.5" />
+              </div>
+              <div style={{ fontSize: '0.65rem', color: 'var(--s-text-muted)', marginTop: 2 }}>
+                {'Systemzustand: '}{adaptiveState.lastHealthScore ?? '?'}{'%'}
+                {adaptiveState.lastCheckAt && ` · Letzte Pr\u00fcfung: ${new Date(adaptiveState.lastCheckAt).toLocaleTimeString('de-DE')}`}
+                {adaptiveState.restricted && ' · Ausgehender Datenverkehr blockiert'}
+              </div>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 6, flexShrink: 0, alignItems: 'center' }}>
+            {adaptiveState.restricted ? (
+              <button className="s-btn s-btn-sm s-btn-ghost" style={{ borderColor: 'rgba(61,255,143,0.2)' }} onClick={async () => {
+                try {
+                  const r = await api()?.adaptive?.lift?.();
+                  if (r?.success) { notify.success('Netzwerkeinschränkung aufgehoben'); fetchData(); }
+                  else notify.error(r?.error || 'Fehler beim Aufheben');
+                } catch (e: any) { notify.error(e?.message || 'Fehler'); }
+              }}>{'Einschr\u00e4nkung aufheben'}</button>
+            ) : (
+              <button className="s-btn s-btn-sm s-btn-ghost" style={{ borderColor: 'rgba(255,95,95,0.2)' }} onClick={async () => {
+                try {
+                  const r = await api()?.adaptive?.restrict?.();
+                  if (r?.success) { notify.warning('Netzwerk isoliert — Kill-Switch aktiviert'); fetchData(); }
+                  else notify.error(r?.error || 'Fehler bei Isolierung');
+                } catch (e: any) { notify.error(e?.message || 'Fehler'); }
+              }}>Manuell isolieren</button>
+            )}
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', userSelect: 'none' }}>
+              <div
+                onClick={async () => {
+                  try {
+                    const enabled = !adaptiveState.enabled;
+                    const r = await api()?.adaptive?.setConfig?.({ enabled, autoRestrict: enabled });
+                    if (r?.success) { notify.info(enabled ? 'Adaptiver Zugriffsschutz aktiviert' : 'Adaptiver Zugriffsschutz deaktiviert'); fetchData(); }
+                  } catch (e: any) { notify.error(e?.message || 'Fehler'); }
+                }}
+                style={{
+                  width: 36, height: 20, borderRadius: 10, position: 'relative',
+                  background: adaptiveState.enabled ? 'var(--s-green)' : 'rgba(255,255,255,0.1)',
+                  border: `1px solid ${adaptiveState.enabled ? 'rgba(0,230,118,0.4)' : 'rgba(255,255,255,0.15)'}`,
+                  transition: 'all 0.2s ease', cursor: 'pointer',
+                  boxShadow: adaptiveState.enabled ? '0 0 8px rgba(0,230,118,0.3)' : 'none',
+                }}
+              >
+                <div style={{
+                  width: 14, height: 14, borderRadius: '50%', background: '#fff',
+                  position: 'absolute', top: 2,
+                  left: adaptiveState.enabled ? 19 : 2,
+                  transition: 'left 0.2s ease',
+                  boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+                }} />
+              </div>
+              <span style={{ fontSize: '0.65rem', color: adaptiveState.enabled ? 'var(--s-green)' : 'var(--s-text-dim)', fontWeight: 600 }}>
+                {adaptiveState.enabled ? 'Auto-Schutz aktiv' : 'Auto-Schutz aus'}
+              </span>
+            </label>
+          </div>
+        </motion.div>
+      )}
+
       {/* ─── Spacy Header ─── */}
       <div className="s-page-header">
         <div className="s-tab-bar">
@@ -414,8 +535,18 @@ const FirewallPage: React.FC = () => {
                 </thead>
                 <tbody>
                   {filteredRules.length === 0 ? (
-                    <tr><td colSpan={10} style={{ textAlign: 'center', padding: 32, color: 'var(--s-text-dim)' }}>
-                      {loading ? t('common.loading') : t('firewall.rules.noRules')}
+                    <tr><td colSpan={10} style={{ textAlign: 'center', padding: '32px 24px', color: 'var(--s-text-dim)' }}>
+                      {loading ? t('common.loading') : (
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+                          <span style={{ fontSize: '1.5rem', opacity: 0.3 }}>{'\ud83d\udee1'}</span>
+                          <div style={{ fontSize: '0.8125rem' }}>{searchFilter ? 'Keine Regeln f\u00fcr diesen Filter gefunden' : t('firewall.rules.noRules')}</div>
+                          <div style={{ fontSize: '0.675rem', maxWidth: 440, lineHeight: 1.5, color: 'var(--s-text-dim)' }}>
+                            {searchFilter
+                              ? 'Versuchen Sie einen anderen Suchbegriff oder entfernen Sie den Filter.'
+                              : 'Firewall-Regeln bestimmen, welcher Netzwerkverkehr erlaubt oder blockiert wird. Nutzen Sie den Tab "Block IP/Port/Subnet", um schnell eine neue Blockier-Regel zu erstellen, oder klicken Sie auf "Refresh", um bestehende Windows-Firewall-Regeln zu laden.'}
+                          </div>
+                        </div>
+                      )}
                     </td></tr>
                   ) : filteredRules.slice(0, 200).map((rule, i) => {
                     const en = isEnabled(rule.enabled);
@@ -533,7 +664,13 @@ const FirewallPage: React.FC = () => {
         {tab === 'pending' && (
           <motion.div key="pending" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {pendingRules.length === 0 ? (
-              <div className="s-card-spacy" style={{ textAlign: 'center', padding: 40, color: 'var(--s-text-dim)' }}>No pending firewall rules</div>
+              <div className="s-card-spacy" style={{ textAlign: 'center', padding: '32px 24px', color: 'var(--s-text-dim)' }}>
+                <div style={{ fontSize: '1.5rem', marginBottom: 8, opacity: 0.3 }}>{'✓'}</div>
+                <div style={{ fontSize: '0.8125rem', marginBottom: 4 }}>Keine ausstehenden Regeln</div>
+                <div style={{ fontSize: '0.675rem', maxWidth: 400, margin: '0 auto', lineHeight: 1.5 }}>
+                  Ausstehende Regeln werden automatisch von Sentinel erstellt, wenn verdächtiger Netzwerkverkehr erkannt wird. Sie können sie hier bestätigen oder verwerfen.
+                </div>
+              </div>
             ) : pendingRules.map((rule) => (
               <div key={rule.id} className="s-card-spacy" style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
                 <div style={{ flex: 1 }}>
@@ -562,7 +699,12 @@ const FirewallPage: React.FC = () => {
               <button className="s-btn s-btn-danger s-btn-sm" onClick={async () => { await api()?.shield?.clearSentinelRules?.(); fetchData(); }}>{t('common.clearAll')}</button>
             </div>
             {sentinelRules.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: 24, color: 'var(--s-text-dim)' }}>No sentinel-managed rules</div>
+              <div style={{ textAlign: 'center', padding: '24px 16px', color: 'var(--s-text-dim)' }}>
+                <div style={{ fontSize: '0.8125rem', marginBottom: 4 }}>Keine Sentinel-verwalteten Regeln</div>
+                <div style={{ fontSize: '0.675rem', maxWidth: 400, margin: '0 auto', lineHeight: 1.5 }}>
+                  Hier erscheinen Regeln, die Sentinel automatisch erstellt hat (z.B. durch IoC-Erkennung oder adaptiven Zugriffsschutz). Sie können diese zentral verwalten und bei Bedarf löschen.
+                </div>
+              </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                 {sentinelRules.map((name, i) => (

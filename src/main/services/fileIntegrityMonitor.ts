@@ -25,6 +25,13 @@ export interface FimChange {
   currentHash?: string;
   sizeBytes?: number;
   risk: 'low' | 'medium' | 'high' | 'critical';
+  manipulation?: ManipulationIndicator;
+}
+
+export interface ManipulationIndicator {
+  type: 'entropy-spike' | 'micro-edit' | 'mass-modify' | 'none';
+  confidence: number;
+  detail: string;
 }
 
 interface BaselineEntry {
@@ -32,6 +39,7 @@ interface BaselineEntry {
   hash: string;
   size: number;
   mtime: string;
+  entropy?: number;
 }
 
 const DEFAULT_WATCHED_PATHS = [
@@ -69,6 +77,72 @@ function hashFile(filePath: string): string {
   } catch {
     return '';
   }
+}
+
+function calcEntropy(filePath: string): number {
+  try {
+    const buf = fs.readFileSync(filePath);
+    if (buf.length === 0) return 0;
+    const freq = new Uint32Array(256);
+    for (let i = 0; i < buf.length; i++) freq[buf[i]]++;
+    let ent = 0;
+    for (let i = 0; i < 256; i++) {
+      if (freq[i] === 0) continue;
+      const p = freq[i] / buf.length;
+      ent -= p * Math.log2(p);
+    }
+    return Math.round(ent * 1000) / 1000;
+  } catch { return 0; }
+}
+
+let _recentModCount = 0;
+let _recentModWindow = 0;
+const MASS_MODIFY_THRESHOLD = 5;
+const MASS_MODIFY_WINDOW_MS = 10_000;
+const ENTROPY_SPIKE_THRESHOLD = 1.5;
+
+function detectManipulation(
+  fp: string, existing: BaselineEntry | undefined, currentSize: number
+): ManipulationIndicator {
+  if (!existing) return { type: 'none', confidence: 0, detail: '' };
+
+  const now = Date.now();
+  if (now - _recentModWindow > MASS_MODIFY_WINDOW_MS) {
+    _recentModCount = 0; _recentModWindow = now;
+  }
+  _recentModCount++;
+
+  if (_recentModCount >= MASS_MODIFY_THRESHOLD) {
+    return {
+      type: 'mass-modify',
+      confidence: Math.min(0.95, 0.5 + _recentModCount * 0.05),
+      detail: `${_recentModCount} files modified within ${MASS_MODIFY_WINDOW_MS / 1000}s — possible ransomware`,
+    };
+  }
+
+  const oldEntropy = existing.entropy ?? 0;
+  if (oldEntropy > 0) {
+    const newEntropy = calcEntropy(fp);
+    const delta = newEntropy - oldEntropy;
+    if (delta > ENTROPY_SPIKE_THRESHOLD) {
+      return {
+        type: 'entropy-spike',
+        confidence: Math.min(0.95, 0.4 + delta * 0.15),
+        detail: `Entropy jumped ${oldEntropy.toFixed(2)} → ${newEntropy.toFixed(2)} (+${delta.toFixed(2)}) — possible encryption`,
+      };
+    }
+  }
+
+  const sizeDelta = Math.abs(currentSize - existing.size);
+  if (sizeDelta > 0 && sizeDelta < 512 && existing.size > 1024) {
+    return {
+      type: 'micro-edit',
+      confidence: 0.3,
+      detail: `Subtle ${sizeDelta}B change in ${(existing.size / 1024).toFixed(1)}KB file — possible data poisoning`,
+    };
+  }
+
+  return { type: 'none', confidence: 0, detail: '' };
 }
 
 function assessRisk(filePath: string, changeType: string): FimChange['risk'] {
@@ -205,7 +279,11 @@ export function runCheck(): FimChange[] {
       newChanges.push(change);
       _baseline.set(fp, { path: fp, hash, size, mtime });
     } else if (existing.hash !== hash) {
-      // Modified
+      // Modified — run Ransomware 3.0 manipulation detection
+      const manip = detectManipulation(fp, existing, size);
+      const baseRisk = assessRisk(fp, 'modified');
+      const escalatedRisk = manip.type !== 'none' && manip.confidence > 0.5
+        ? 'critical' : baseRisk;
       const change: FimChange = {
         id: `fim-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         filePath: fp,
@@ -214,10 +292,12 @@ export function runCheck(): FimChange[] {
         previousHash: existing.hash,
         currentHash: hash,
         sizeBytes: size,
-        risk: assessRisk(fp, 'modified'),
+        risk: escalatedRisk,
+        manipulation: manip.type !== 'none' ? manip : undefined,
       };
       newChanges.push(change);
-      _baseline.set(fp, { path: fp, hash, size, mtime });
+      const ent = calcEntropy(fp);
+      _baseline.set(fp, { path: fp, hash, size, mtime, entropy: ent });
     }
   }
 
@@ -265,7 +345,8 @@ export function initFim(): void {
       if (!hash) continue;
       try {
         const stat = fs.statSync(fp);
-        _baseline.set(fp, { path: fp, hash, size: stat.size, mtime: stat.mtime.toISOString() });
+        const ent = calcEntropy(fp);
+        _baseline.set(fp, { path: fp, hash, size: stat.size, mtime: stat.mtime.toISOString(), entropy: ent });
       } catch { /* file may vanish between hash and stat */ }
     }
     saveBaseline();
@@ -311,7 +392,8 @@ export function resetBaseline(): void {
     if (!hash) continue;
     try {
       const stat = fs.statSync(fp);
-      _baseline.set(fp, { path: fp, hash, size: stat.size, mtime: stat.mtime.toISOString() });
+      const ent = calcEntropy(fp);
+      _baseline.set(fp, { path: fp, hash, size: stat.size, mtime: stat.mtime.toISOString(), entropy: ent });
     } catch { /* file may vanish between hash and stat */ }
   }
   saveBaseline();

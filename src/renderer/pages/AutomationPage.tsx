@@ -6,6 +6,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { notify } from '../components/Common/SentinelNotification';
+import InfoBadge from '../components/Common/InfoBadge';
 import { useTranslation } from 'react-i18next';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -49,13 +50,13 @@ const AutomationPage: React.FC = () => {
     try {
       const r = await api()?.executeQuickAction?.(action.id);
       const success = r?.success ?? false;
-      const message = r?.message || (success ? 'Action completed' : 'Action failed');
+      const message = r?.message || (success ? 'Aktion ausgef\u00fchrt' : 'Aktion fehlgeschlagen');
       setResults((prev) => [{ id: action.id, label: action.label, success, message, timestamp: Date.now() }, ...prev.slice(0, 9)]);
       if (success) notify.success(`${action.label}: ${message}`);
       else notify.error(`${action.label}: ${message}`);
     } catch (e: any) {
       setResults((prev) => [{ id: action.id, label: action.label, success: false, message: String(e), timestamp: Date.now() }, ...prev.slice(0, 9)]);
-      notify.error(`${action.label} failed: ${e?.message || 'Unknown error'}`);
+      notify.error(`${action.label}: ${e?.message || 'Unbekannter Fehler'}`);
     }
     setExecuting(null);
   };
@@ -118,6 +119,17 @@ const AutomationPage: React.FC = () => {
           {autonomousMode ? `✓ ${t('common.enabled')}` : t('common.enable')}
         </button>
       </motion.div>
+
+      {/* Beginner Guidance + DSGVO */}
+      <div style={{ padding: '10px 16px', borderRadius: 10, background: 'rgba(0,230,118,0.04)', border: '1px solid rgba(0,230,118,0.12)', display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+        <div style={{ display: 'flex', gap: 6, flexShrink: 0, marginTop: 2 }}>
+          <InfoBadge glossaryKey="DSGVO Art.5" />
+          <InfoBadge glossaryKey="LOKAL" />
+        </div>
+        <div style={{ fontSize: '0.65rem', color: 'var(--s-text-dim)', lineHeight: 1.5 }}>
+          <strong style={{ color: 'var(--s-text-muted)' }}>F{'\u00fc'}r Einsteiger:</strong> Schnellaktionen {'\u00e4'}ndern sofort Ihre Sicherheitseinstellungen. <strong style={{ color: 'var(--s-text-secondary)' }}>Gaming-Modus</strong> reduziert Hintergrundscans, <strong style={{ color: 'var(--s-text-secondary)' }}>Privacy-Modus</strong> blockiert Tracker, <strong style={{ color: 'var(--s-text-secondary)' }}>Lockdown</strong> sperrt alle nicht-essentiellen Verbindungen. Der <strong style={{ color: 'var(--s-text-secondary)' }}>Autonome Modus</strong> erlaubt Sentinel, automatisch auf Bedrohungen zu reagieren. Alle Aktionen laufen 100% lokal.
+        </div>
+      </div>
 
       {/* ─── Spacy Quick Actions Grid ─── */}
       <div>

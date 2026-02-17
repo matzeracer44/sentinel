@@ -82,6 +82,16 @@ const electronAPI = {
   getActivityLog: () => ipcRenderer.invoke('get-activity-log'),
   clearActivityLog: () => ipcRenderer.invoke('clear-activity-log'),
 
+  // OSOP — One-Session-Only Protocol
+  osop: {
+    getSession: () => ipcRenderer.invoke('osop-get-session'),
+    getNonce: () => ipcRenderer.invoke('osop-get-nonce'),
+    validateNonce: (nonce: string) => ipcRenderer.invoke('osop-validate-nonce', nonce),
+    onSessionReset: (cb: (data: { sessionId: string; reason: string }) => void) => {
+      ipcRenderer.on('osop-session-reset', (_event: any, data: any) => cb(data));
+    },
+  },
+
   // Quick Actions
   executeQuickAction: (action: string) => ipcRenderer.invoke('execute-quick-action', action),
 
@@ -342,6 +352,8 @@ const electronAPI = {
   // Vault Encryption Module APIs
   vault: {
     // File Encryptor
+    selectFiles: () => ipcRenderer.invoke('vault-select-files'),
+    selectOutputDir: () => ipcRenderer.invoke('vault-select-output-dir'),
     getEncryptedFiles: () => ipcRenderer.invoke('vault-get-encrypted-files'),
     encryptFiles: (filePaths: string[], password: string) => ipcRenderer.invoke('vault-encrypt-files', filePaths, password),
     decryptFile: (filePath: string, password: string) => ipcRenderer.invoke('vault-decrypt-file', filePath, password),
@@ -503,6 +515,98 @@ const electronAPI = {
       return () => ipcRenderer.removeListener('sentinel-audit-event', wrapped);
     },
     getAuditBuffer: () => ipcRenderer.invoke('get-audit-log-buffer'),
+  },
+
+  // Threat Intelligence (MISP IoC Feeds)
+  threatIntel: {
+    refresh: () => ipcRenderer.invoke('threat-intel-refresh'),
+    checkIP: (ip: string) => ipcRenderer.invoke('threat-intel-check-ip', ip),
+    checkHash: (hash: string) => ipcRenderer.invoke('threat-intel-check-hash', hash),
+    getStats: () => ipcRenderer.invoke('threat-intel-stats'),
+    getConfig: () => ipcRenderer.invoke('threat-intel-get-config'),
+    setConfig: (update: any) => ipcRenderer.invoke('threat-intel-set-config', update),
+  },
+
+  // SBOM Integrity Verifier (BSI APP.6)
+  sbom: {
+    generate: () => ipcRenderer.invoke('sbom-generate'),
+    verify: () => ipcRenderer.invoke('sbom-verify'),
+    info: () => ipcRenderer.invoke('sbom-info'),
+    checkScriptBlockLogging: () => ipcRenderer.invoke('sbom-check-script-block-logging'),
+  },
+
+  // Adaptive Access Control (Zero Trust)
+  adaptive: {
+    getConfig: () => ipcRenderer.invoke('adaptive-get-config'),
+    setConfig: (update: any) => ipcRenderer.invoke('adaptive-set-config', update),
+    getState: () => ipcRenderer.invoke('adaptive-get-state'),
+    restrict: () => ipcRenderer.invoke('adaptive-restrict'),
+    lift: () => ipcRenderer.invoke('adaptive-lift'),
+  },
+
+  // Threat Intelligence Automation Engine
+  threatAuto: {
+    getStatus: () => ipcRenderer.invoke('threat-auto-get-status'),
+    getConfig: () => ipcRenderer.invoke('threat-auto-get-config'),
+    setConfig: (update: any) => ipcRenderer.invoke('threat-auto-set-config', update),
+    triggerYara: () => ipcRenderer.invoke('threat-auto-trigger-yara'),
+    triggerIoC: () => ipcRenderer.invoke('threat-auto-trigger-ioc'),
+    triggerFeed: () => ipcRenderer.invoke('threat-auto-trigger-feed'),
+    clearYaraCache: () => ipcRenderer.invoke('threat-auto-clear-yara-cache'),
+  },
+
+  // YARA Rule Scanning (via ARGUS)
+  yara: {
+    scanFile: (filePath: string) => ipcRenderer.invoke('yara-scan-file', filePath),
+    listRules: () => ipcRenderer.invoke('yara-list-rules'),
+  },
+
+  // UEBA Anomaly Detection (via ARGUS)
+  ueba: {
+    train: (snapshot: any) => ipcRenderer.invoke('ueba-train', snapshot),
+    detect: (snapshot: any) => ipcRenderer.invoke('ueba-detect', snapshot),
+    status: () => ipcRenderer.invoke('ueba-status'),
+  },
+
+  // P1: Local PIN Authentication
+  auth: {
+    getStatus: () => ipcRenderer.invoke('auth-get-status'),
+    setPin: (pin: string) => ipcRenderer.invoke('auth-set-pin', pin),
+    removePin: (currentPin: string) => ipcRenderer.invoke('auth-remove-pin', currentPin),
+    authenticate: (pin: string, totpCode?: string) => ipcRenderer.invoke('auth-authenticate', pin, totpCode),
+    checkSession: () => ipcRenderer.invoke('auth-check-session'),
+    lock: () => ipcRenderer.invoke('auth-lock'),
+    setRequireOnLaunch: (enabled: boolean) => ipcRenderer.invoke('auth-set-require-on-launch', enabled),
+    isRequired: () => ipcRenderer.invoke('auth-is-required'),
+  },
+
+  // P1b: TOTP Multi-Factor Authentication
+  totp: {
+    getStatus: () => ipcRenderer.invoke('totp-get-status'),
+    setup: () => ipcRenderer.invoke('totp-setup'),
+    verifyAndEnable: (token: string) => ipcRenderer.invoke('totp-verify-and-enable', token),
+    verify: (token: string) => ipcRenderer.invoke('totp-verify', token),
+    disable: (token: string) => ipcRenderer.invoke('totp-disable', token),
+  },
+
+  // P2: Update Signature Verifier (BSI APP.6.A4)
+  updater: {
+    verifyManifest: (manifest: any) => ipcRenderer.invoke('update-verify-manifest', manifest),
+    verifyFile: (filePath: string, sha256: string) => ipcRenderer.invoke('update-verify-file', filePath, sha256),
+    listKeys: () => ipcRenderer.invoke('update-list-keys'),
+    addKey: (id: string, pem: string) => ipcRenderer.invoke('update-add-key', id, pem),
+    removeKey: (id: string) => ipcRenderer.invoke('update-remove-key', id),
+    getHistory: () => ipcRenderer.invoke('update-get-history'),
+    generateKeyPair: () => ipcRenderer.invoke('update-generate-keypair'),
+  },
+
+  // P3: SIEM/MDR Event Export
+  siem: {
+    getConfig: () => ipcRenderer.invoke('siem-get-config'),
+    setConfig: (update: any) => ipcRenderer.invoke('siem-set-config', update),
+    exportEvents: (format?: string) => ipcRenderer.invoke('siem-export-events', format),
+    sendSyslog: () => ipcRenderer.invoke('siem-send-syslog'),
+    listExports: () => ipcRenderer.invoke('siem-list-exports'),
   },
 
   // Platform info
@@ -720,6 +824,8 @@ export interface ElectronAPI {
   };
   vault: {
     // File Encryptor
+    selectFiles: () => Promise<{ success: boolean; files: string[] }>;
+    selectOutputDir: () => Promise<{ success: boolean; dir: string | null }>;
     getEncryptedFiles: () => Promise<{ success: boolean; files: any[] }>;
     encryptFiles: (filePaths: string[], password: string) => Promise<{ success: boolean; encryptedCount?: number; message?: string }>;
     decryptFile: (filePath: string, password: string) => Promise<{ success: boolean; outputPath?: string; message?: string }>;
@@ -812,6 +918,84 @@ export interface ElectronAPI {
   };
   timeline: {
     getEvents: (maxEvents?: number) => Promise<{ success: boolean; events: any[]; error?: string }>;
+  };
+  threatIntel: {
+    refresh: () => Promise<{ success: boolean; ips: number; domains: number; hashes: number; errors: string[] }>;
+    checkIP: (ip: string) => Promise<{ success: boolean; malicious: boolean; source?: string; error?: string }>;
+    checkHash: (hash: string) => Promise<{ success: boolean; malicious: boolean; source?: string; error?: string }>;
+    getStats: () => Promise<{ success: boolean; enabled: boolean; lastUpdate: string | null; ips: number; domains: number; hashes: number; error?: string }>;
+    getConfig: () => Promise<{ success: boolean; config?: any; error?: string }>;
+    setConfig: (update: any) => Promise<{ success: boolean; config?: any; error?: string }>;
+  };
+  sbom: {
+    generate: () => Promise<{ success: boolean; fileCount?: number; version?: string; error?: string }>;
+    verify: () => Promise<{ success: boolean; valid?: boolean; totalFiles?: number; matched?: number; mismatched?: string[]; missing?: string[]; error?: string }>;
+    info: () => Promise<{ success: boolean; exists: boolean; generatedAt?: string; version?: string; fileCount?: number; error?: string }>;
+    checkScriptBlockLogging: () => Promise<{ success: boolean; enabled: boolean; detail: string; error?: string }>;
+  };
+  adaptive: {
+    getConfig: () => Promise<{ success: boolean; config?: any; error?: string }>;
+    setConfig: (update: any) => Promise<{ success: boolean; config?: any; error?: string }>;
+    getState: () => Promise<{ success: boolean; restricted: boolean; lastHealthScore: number | null; lastCheckAt: string | null; error?: string }>;
+    restrict: () => Promise<{ success: boolean; error?: string }>;
+    lift: () => Promise<{ success: boolean; error?: string }>;
+  };
+  threatAuto: {
+    getStatus: () => Promise<{ success: boolean; running?: boolean; yara?: any; ioc?: any; feed?: any; recentYaraHits?: any[]; recentIoCHits?: any[]; error?: string }>;
+    getConfig: () => Promise<{ success: boolean; config?: any; error?: string }>;
+    setConfig: (update: any) => Promise<{ success: boolean; config?: any; error?: string }>;
+    triggerYara: () => Promise<{ success: boolean; files?: number; threats?: number; error?: string }>;
+    triggerIoC: () => Promise<{ success: boolean; connections?: number; hits?: number; error?: string }>;
+    triggerFeed: () => Promise<{ success: boolean; ips?: number; hashes?: number; domains?: number; error?: string }>;
+    clearYaraCache: () => Promise<{ success: boolean; error?: string }>;
+  };
+  yara: {
+    scanFile: (filePath: string) => Promise<{ success: boolean; matches?: any[]; rules_loaded?: number; error?: string }>;
+    listRules: () => Promise<{ success: boolean; rules: string[]; count: number; error?: string }>;
+  };
+  ueba: {
+    train: (snapshot: any) => Promise<{ success: boolean; baseline_connections?: number; baseline_processes?: number; error?: string }>;
+    detect: (snapshot: any) => Promise<{ success: boolean; anomalies?: any[]; checked?: number; error?: string }>;
+    status: () => Promise<{ success: boolean; trained?: boolean; updated_at?: string; connection_patterns?: number; known_processes?: number; error?: string }>;
+  };
+  auth: {
+    getStatus: () => Promise<{ success: boolean; enabled: boolean; hasPin: boolean; requireOnLaunch: boolean; locked: boolean; sessionValid: boolean; error?: string }>;
+    setPin: (pin: string) => Promise<{ success: boolean; error?: string }>;
+    removePin: (currentPin: string) => Promise<{ success: boolean; error?: string }>;
+    authenticate: (pin: string, totpCode?: string) => Promise<{ success: boolean; token?: string; expiresAt?: number; locked?: boolean; lockRemainingMs?: number; totpRequired?: boolean; error?: string }>;
+    checkSession: () => Promise<{ success: boolean; valid: boolean; expiresAt?: number; error?: string }>;
+    lock: () => Promise<{ success: boolean; error?: string }>;
+    setRequireOnLaunch: (enabled: boolean) => Promise<{ success: boolean; requireOnLaunch: boolean; error?: string }>;
+    isRequired: () => Promise<{ success: boolean; required: boolean; error?: string }>;
+  };
+  totp: {
+    getStatus: () => Promise<{ success: boolean; enabled: boolean; configured: boolean; verifiedAt: string | null; backupCodesRemaining: number; error?: string }>;
+    setup: () => Promise<{ success: boolean; secret?: string; uri?: string; qrData?: string; error?: string }>;
+    verifyAndEnable: (token: string) => Promise<{ success: boolean; backupCodes?: string[]; error?: string }>;
+    verify: (token: string) => Promise<{ success: boolean; method?: 'totp' | 'backup'; error?: string }>;
+    disable: (token: string) => Promise<{ success: boolean; error?: string }>;
+  };
+  updater: {
+    verifyManifest: (manifest: any) => Promise<{ success: boolean; valid?: boolean; version?: string; errors?: string[]; warnings?: string[]; error?: string }>;
+    verifyFile: (filePath: string, sha256: string) => Promise<{ success: boolean; valid?: boolean; error?: string }>;
+    listKeys: () => Promise<{ success: boolean; keys: Array<{ id: string }>; error?: string }>;
+    addKey: (id: string, pem: string) => Promise<{ success: boolean; error?: string }>;
+    removeKey: (id: string) => Promise<{ success: boolean; removed?: boolean; error?: string }>;
+    getHistory: () => Promise<{ success: boolean; history: any[]; error?: string }>;
+    generateKeyPair: () => Promise<{ success: boolean; publicKeyPem?: string; privateKeyPem?: string; error?: string }>;
+  };
+  siem: {
+    getConfig: () => Promise<{ success: boolean; config?: any; error?: string }>;
+    setConfig: (update: any) => Promise<{ success: boolean; config?: any; error?: string }>;
+    exportEvents: (format?: string) => Promise<{ success: boolean; path?: string; count: number; error?: string }>;
+    sendSyslog: () => Promise<{ success: boolean; sent: number; error?: string }>;
+    listExports: () => Promise<{ success: boolean; exports: Array<{ name: string; size: number; created: string }>; error?: string }>;
+  };
+  osop: {
+    getSession: () => Promise<{ success: boolean; sessionId: string; startedAt: string; authenticated: boolean; error?: string }>;
+    getNonce: () => Promise<{ success: boolean; nonce: string; error?: string }>;
+    validateNonce: (nonce: string) => Promise<{ success: boolean; valid: boolean; error?: string }>;
+    onSessionReset: (cb: (data: { sessionId: string; reason: string }) => void) => void;
   };
   platform: string;
 }

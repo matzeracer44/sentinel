@@ -7,6 +7,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { notify } from '../components/Common/SentinelNotification';
+import InfoBadge from '../components/Common/InfoBadge';
 import { LegacyScanCheckItem as ScanCheckItem } from '../components/Common/ScanCheckItem';
 import { useTranslation } from 'react-i18next';
 
@@ -49,25 +50,37 @@ interface HardwareReport {
   timestamp: string;
 }
 
-const GaugeRing: React.FC<{ value: number; label: string; color: string; size?: number }> = ({ value, label, color, size = 100 }) => {
-  const r = (size - 12) / 2;
+const GaugeRing: React.FC<{ value: number; label: string; color: string; size?: number }> = ({ value, label, color, size = 110 }) => {
+  const r = (size - 14) / 2;
   const circ = 2 * Math.PI * r;
   const offset = circ - (value / 100) * circ;
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
-      <svg width={size} height={size} style={{ filter: `drop-shadow(0 0 8px ${color}44)` }}>
-        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="rgba(109,120,255,0.1)" strokeWidth="6" />
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, position: 'relative' }}>
+      <div style={{
+        position: 'absolute', width: size * 0.7, height: size * 0.7, borderRadius: '50%',
+        background: `radial-gradient(circle, ${color}12, transparent 70%)`,
+        filter: 'blur(12px)', pointerEvents: 'none', top: '10%',
+      }} />
+      <svg width={size} height={size} style={{ filter: `drop-shadow(0 0 10px ${color}33)`, position: 'relative', zIndex: 1 }}>
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="rgba(109,120,255,0.08)" strokeWidth="7" />
         <circle
           cx={size / 2} cy={size / 2} r={r} fill="none"
-          stroke={color} strokeWidth="6" strokeLinecap="round"
+          stroke={color} strokeWidth="7" strokeLinecap="round"
           strokeDasharray={`${circ}`} strokeDashoffset={offset}
           transform={`rotate(-90 ${size / 2} ${size / 2})`}
-          style={{ transition: 'stroke-dashoffset 0.8s ease-out' }}
+          style={{ transition: 'stroke-dashoffset 1s cubic-bezier(0.4,0,0.2,1)' }}
         />
-        <text x={size / 2} y={size / 2 - 4} textAnchor="middle" fill={color} fontSize="1.25rem" fontWeight="700" fontFamily="var(--s-font-display)">
+        <circle
+          cx={size / 2} cy={size / 2} r={r} fill="none"
+          stroke={color} strokeWidth="2" strokeLinecap="round"
+          strokeDasharray={`${circ}`} strokeDashoffset={offset}
+          transform={`rotate(-90 ${size / 2} ${size / 2})`}
+          style={{ transition: 'stroke-dashoffset 1s cubic-bezier(0.4,0,0.2,1)', filter: 'blur(4px)', opacity: 0.4 }}
+        />
+        <text x={size / 2} y={size / 2 - 2} textAnchor="middle" fill={color} fontSize="1.4rem" fontWeight="800" fontFamily="var(--s-font-display)">
           {value}%
         </text>
-        <text x={size / 2} y={size / 2 + 14} textAnchor="middle" fill="rgba(160,168,220,0.55)" fontSize="0.55rem" style={{ textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+        <text x={size / 2} y={size / 2 + 16} textAnchor="middle" fill="rgba(160,168,220,0.5)" fontSize="0.5rem" style={{ textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 600 }}>
           {label}
         </text>
       </svg>
@@ -202,50 +215,57 @@ const SystemPage: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-      {/* ─── Spacy Live Gauges ─── */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16 }}>
-        <motion.div className="s-card-spacy" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: 20 }}>
+      {/* ═══ Live System Gauges ═══ */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14 }}>
+        <motion.div className="s-card-compact-spacy" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+          style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '18px 14px', borderTop: `2px solid ${gaugeColor(data?.cpu.currentLoad ?? 0)}33` }}>
           <GaugeRing value={data?.cpu.currentLoad ?? 0} label="CPU" color={gaugeColor(data?.cpu.currentLoad ?? 0)} />
-          <div style={{ marginTop: 8, fontSize: '0.75rem', color: 'var(--s-text-muted)', textAlign: 'center' }}>
+          <div style={{ marginTop: 6, fontSize: '0.7rem', color: 'var(--s-text-muted)', textAlign: 'center' }} className="s-truncate">
             {data?.cpu.name || t('common.loading')}
           </div>
-          <div style={{ fontSize: '0.6875rem', color: 'var(--s-text-dim)' }}>
-            {data?.cpu.cores ?? 0} Cores / {data?.cpu.threads ?? 0} Threads
+          <div style={{ fontSize: '0.6rem', color: 'var(--s-text-dim)' }}>
+            {data?.cpu.cores ?? 0} Kerne / {data?.cpu.threads ?? 0} Threads
           </div>
         </motion.div>
 
-        <motion.div className="s-card-spacy" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 }} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: 20 }}>
+        <motion.div className="s-card-compact-spacy" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 }}
+          style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '18px 14px', borderTop: `2px solid ${gaugeColor(data?.ram.usagePercent ?? 0)}33` }}>
           <GaugeRing value={data?.ram.usagePercent ?? 0} label="RAM" color={gaugeColor(data?.ram.usagePercent ?? 0)} />
-          <div style={{ marginTop: 8, fontSize: '0.75rem', color: 'var(--s-text-muted)' }}>
+          <div style={{ marginTop: 6, fontSize: '0.7rem', color: 'var(--s-text-muted)' }}>
             {data?.ram.usedGB ?? 0} / {data?.ram.totalGB ?? 0} GB
           </div>
-          <div style={{ fontSize: '0.6875rem', color: 'var(--s-text-dim)' }}>
-            {data?.ram.freeGB ?? 0} GB {t('common.none')}
+          <div style={{ fontSize: '0.6rem', color: 'var(--s-text-dim)' }}>
+            {data?.ram.freeGB ?? 0} GB frei
           </div>
         </motion.div>
 
         {(data?.disks ?? [{ drive: 'C:', totalGB: 0, usedGB: 0, freeGB: 0, usagePercent: 0 }]).map((disk, i) => (
-          <motion.div key={disk.drive} className="s-card-spacy" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 + i * 0.05 }} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: 20 }}>
+          <motion.div key={disk.drive} className="s-card-compact-spacy" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 + i * 0.05 }}
+            style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '18px 14px', borderTop: `2px solid ${gaugeColor(disk.usagePercent)}33` }}>
             <GaugeRing value={disk.usagePercent} label={`Disk ${disk.drive}`} color={gaugeColor(disk.usagePercent)} />
-            <div style={{ marginTop: 8, fontSize: '0.75rem', color: 'var(--s-text-muted)' }}>
+            <div style={{ marginTop: 6, fontSize: '0.7rem', color: 'var(--s-text-muted)' }}>
               {disk.usedGB} / {disk.totalGB} GB
             </div>
-            <div style={{ fontSize: '0.6875rem', color: 'var(--s-text-dim)' }}>
-              {disk.freeGB} GB {t('common.none')}
+            <div style={{ fontSize: '0.6rem', color: 'var(--s-text-dim)' }}>
+              {disk.freeGB} GB frei
             </div>
           </motion.div>
         ))}
 
         {health && (
-          <motion.div className="s-card-spacy" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: 20 }}>
-            <GaugeRing value={health.score} label="Health" color={gaugeColor(100 - health.score)} />
-            <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
-              {Object.entries(health.factors).map(([k, v]) => (
-                <div key={k} style={{ textAlign: 'center' }}>
-                  <div style={{ fontSize: '0.8rem', fontWeight: 600, color: gaugeColor(100 - v) }}>{v}</div>
-                  <div style={{ fontSize: '0.55rem', color: 'var(--s-text-dim)', textTransform: 'capitalize' }}>{k}</div>
-                </div>
-              ))}
+          <motion.div className="s-card-compact-spacy" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }}
+            style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '18px 14px', borderTop: `2px solid ${gaugeColor(100 - health.score)}33` }}>
+            <GaugeRing value={health.score} label="Zustand" color={gaugeColor(100 - health.score)} />
+            <div style={{ marginTop: 6, display: 'flex', gap: 10 }}>
+              {Object.entries(health.factors).map(([k, v]) => {
+                const labels: Record<string, string> = { security: 'Sicherheit', performance: 'Leistung', privacy: 'Datenschutz' };
+                return (
+                  <div key={k} style={{ textAlign: 'center' }}>
+                    <div style={{ fontSize: '0.8rem', fontWeight: 700, fontFamily: 'var(--s-font-display)', color: gaugeColor(100 - v) }}>{v}</div>
+                    <div style={{ fontSize: '0.475rem', color: 'var(--s-text-dim)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>{labels[k] || k}</div>
+                  </div>
+                );
+              })}
             </div>
           </motion.div>
         )}
@@ -537,7 +557,7 @@ const SystemPage: React.FC = () => {
           </div>
         ) : (
           <div className="s-card-spacy" style={{ textAlign: 'center', padding: 24, color: 'var(--s-text-dim)' }}>
-            {hwLoading ? 'Discovering hardware...' : 'Click Refresh to scan hardware'}
+            {hwLoading ? 'Hardware wird erkannt...' : 'Aktualisieren klicken, um Hardware zu scannen'}
           </div>
         )}
       </motion.div>
@@ -545,15 +565,15 @@ const SystemPage: React.FC = () => {
       {/* ─── Quick Actions ─── */}
       <motion.div className="s-card-spacy" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-          <span style={{ fontWeight: 700, fontSize: '0.85rem', fontFamily: 'var(--s-font-display)', background: 'linear-gradient(90deg, var(--s-amber), var(--s-cyan))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>Quick Actions</span>
+          <span style={{ fontWeight: 700, fontSize: '0.85rem', fontFamily: 'var(--s-font-display)', background: 'linear-gradient(90deg, var(--s-amber), var(--s-cyan))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>Schnellaktionen</span>
           <div className="s-section-divider" style={{ flex: 1 }} />
         </div>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
           {[
-            { id: 'clear-cache', label: 'Clear Standby Cache', icon: '🧹' },
-            { id: 'perf-scan', label: 'Performance Scan', icon: '⚡' },
-            { id: 'kernel-scan', label: 'Kernel Integrity', icon: '�' },
-            { id: 'security-overview', label: 'Security Overview', icon: '🛡' },
+            { id: 'clear-cache', label: 'Standby-Cache leeren', icon: '🧹' },
+            { id: 'perf-scan', label: 'Leistungs-Scan', icon: '⚡' },
+            { id: 'kernel-scan', label: 'Kernel-Integrit\u00e4t', icon: '\ud83d\udd2c' },
+            { id: 'security-overview', label: '\u00dcbersicht Sicherheit', icon: '\ud83d\udee1' },
           ].map((action) => (
             <button
               key={action.id}
@@ -562,7 +582,7 @@ const SystemPage: React.FC = () => {
               onClick={async () => {
                 const a = api();
                 if (action.id === 'clear-cache') {
-                  try { const r = await a?.forge?.clearStandbyCache?.(); notify.success(r?.message || `Cache cleared${r?.freedMB ? ` (${r.freedMB} MB freed)` : ''}`); } catch (e: any) { notify.error(e?.message || 'Failed to clear cache'); }
+                  try { const r = await a?.forge?.clearStandbyCache?.(); notify.success(r?.message || `Cache bereinigt${r?.freedMB ? ` (${r.freedMB} MB freigegeben)` : ''}`); } catch (e: any) { notify.error(e?.message || 'Cache-Bereinigung fehlgeschlagen'); }
                   fetchData();
                 }
                 if (action.id === 'perf-scan') handlePerfScan();
@@ -581,18 +601,63 @@ const SystemPage: React.FC = () => {
         </div>
       </motion.div>
 
+      {/* ─── SBOM Integrity & Supply-Chain Verification ─── */}
+      <motion.div className="s-card-spacy" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.32 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+          <span style={{ fontWeight: 700, fontSize: '0.85rem', fontFamily: 'var(--s-font-display)', background: 'linear-gradient(90deg, var(--s-green), var(--s-cyan))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>System- & SENTINEL-Integrität</span>
+          <InfoBadge glossaryKey="BSI APP.6" />
+          <InfoBadge glossaryKey="LOKAL" />
+          <div className="s-section-divider" style={{ flex: 1 }} />
+        </div>
+        <div style={{ fontSize: '0.75rem', color: 'var(--s-text-muted)', marginBottom: 6, lineHeight: 1.6 }}>
+          Prüfen Sie npm-Abhängigkeiten und das Python-Backend gegen ein signiertes SBOM-Manifest. Erkennt Supply-Chain-Manipulationen, Dateiänderungen und fehlende Komponenten.
+        </div>
+        <div style={{ fontSize: '0.675rem', color: 'var(--s-text-dim)', marginBottom: 14, lineHeight: 1.5, padding: '8px 12px', borderRadius: 8, background: 'rgba(109,120,255,0.02)', border: '1px dashed rgba(109,120,255,0.08)' }}>
+          <strong style={{ color: 'var(--s-text-muted)' }}>Was ist SBOM?</strong> SBOM (Software Bill of Materials) ist eine vollständige Liste aller Software-Bestandteile Ihrer Installation mit kryptografischen Prüfsummen (SHA-256). Damit kann Sentinel erkennen, ob jemand heimlich Dateien verändert hat — zum Beispiel bei einem Supply-Chain-Angriff, bei dem Angreifer Schadsoftware in ein Update einschleusen. Alle Prüfungen laufen <strong style={{ color: 'var(--s-text-secondary)' }}>100% lokal</strong> auf Ihrem Gerät (DSGVO-konform).
+        </div>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <button className="s-btn s-btn-ghost" title="Erstellt ein neues SBOM-Manifest mit SHA-256-Hashes aller Sentinel-Dateien. Dient als Referenz für spätere Integritätsprüfungen." onClick={async () => {
+            try {
+              const r = await api()?.sbom?.generate?.();
+              if (r?.success) notify.success(`SBOM erstellt: ${r.fileCount} Dateien gehasht (v${r.version})`);
+              else notify.error(r?.error || 'Fehlgeschlagen');
+            } catch (e: any) { notify.error(e?.message || 'Error'); }
+          }}>
+            {'📦'} SBOM erstellen
+          </button>
+          <button className="s-btn s-btn-primary" title="Vergleicht alle aktuellen Dateien mit dem gespeicherten SBOM-Manifest. Zeigt geänderte oder fehlende Dateien an." onClick={async () => {
+            try {
+              const r = await api()?.sbom?.verify?.();
+              if (r?.valid) notify.success(`Integrität bestätigt: ${r.matched}/${r.totalFiles} Dateien OK`);
+              else notify.error(`VERLETZUNG: ${r?.mismatched?.length || 0} geändert, ${r?.missing?.length || 0} fehlend`);
+            } catch (e: any) { notify.error(e?.message || 'Error'); }
+          }}>
+            {'✓'} Integrität prüfen
+          </button>
+          <button className="s-btn s-btn-ghost" title="Prüft, ob Windows PowerShell Script Block Logging aktiviert ist — wichtig für die Erkennung von versteckten Skript-Angriffen." onClick={async () => {
+            try {
+              const r = await api()?.sbom?.checkScriptBlockLogging?.();
+              if (r?.enabled) notify.success(r.detail);
+              else notify.warning(r?.detail || 'Script Block Logging nicht aktiviert');
+            } catch (e: any) { notify.error(e?.message || 'Error'); }
+          }}>
+            Script Block Logging prüfen
+          </button>
+        </div>
+      </motion.div>
+
       {/* ─── Sentinel Performance Scan ─── */}
       {(perfScanning || perfResult) && (
         <motion.div ref={perfRef} className="s-card-spacy" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
           <div className="s-flex-between" style={{ marginBottom: 12 }}>
-            <div className="s-heading-sm">⚡ Performance & Kernel Tuning <span style={{ fontWeight: 400, color: 'var(--s-text-dim)' }}>— 25 checks</span></div>
+            <div className="s-heading-sm">{'⚡ Leistung & Kernel-Tuning'} <span style={{ fontWeight: 400, color: 'var(--s-text-dim)' }}>{'— 25 Pr\u00fcfungen'}</span></div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               {perfResult && <span style={{ fontWeight: 700, fontFamily: 'var(--s-font-display)', fontSize: '1.1rem', color: gaugeColor(100 - perfResult.score) }}>{perfResult.score}%</span>}
               {perfResult && <span style={{ fontSize: '0.6875rem', color: 'var(--s-text-muted)' }}>{perfResult.passed}/{perfResult.total} passed</span>}
-              <button className="s-btn s-btn-ghost s-btn-sm" onClick={handlePerfScan} disabled={perfScanning}>{perfScanning ? 'Scanning...' : '↻ Re-scan'}</button>
+              <button className="s-btn s-btn-ghost s-btn-sm" onClick={handlePerfScan} disabled={perfScanning}>{perfScanning ? 'Wird gescannt...' : '\u21bb Erneut scannen'}</button>
             </div>
           </div>
-          {perfScanning && !perfResult && <div style={{ textAlign: 'center', padding: 20, color: 'var(--s-text-dim)' }}>Running 25 performance checks (DPC latency, timer resolution, core parking, memory compression...)</div>}
+          {perfScanning && !perfResult && <div style={{ textAlign: 'center', padding: 20, color: 'var(--s-text-dim)' }}>{'25 Leistungspr\u00fcfungen werden durchgef\u00fchrt (DPC-Latenz, Timer-Aufl\u00f6sung, Core Parking, Speicherkompression...)'}</div>}
           {perfResult?.checks && (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 6 }}>
               {perfResult.checks.map((c, i) => (
@@ -607,14 +672,14 @@ const SystemPage: React.FC = () => {
       {(kernelScanning || kernelResult) && (
         <motion.div ref={kernelRef} className="s-card-spacy" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
           <div className="s-flex-between" style={{ marginBottom: 12 }}>
-            <div className="s-heading-sm">🔬 Kernel & Firmware Integrity <span style={{ fontWeight: 400, color: 'var(--s-text-dim)' }}>— 15 checks</span></div>
+            <div className="s-heading-sm">{'\ud83d\udd2c Kernel- & Firmware-Integrit\u00e4t'} <span style={{ fontWeight: 400, color: 'var(--s-text-dim)' }}>{'— 15 Pr\u00fcfungen'}</span></div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               {kernelResult && <span style={{ fontWeight: 700, fontFamily: 'var(--s-font-display)', fontSize: '1.1rem', color: gaugeColor(100 - kernelResult.score) }}>{kernelResult.score}%</span>}
               {kernelResult && <span style={{ fontSize: '0.6875rem', color: 'var(--s-text-muted)' }}>{kernelResult.passed}/{kernelResult.total} passed</span>}
-              <button className="s-btn s-btn-ghost s-btn-sm" onClick={handleKernelScan} disabled={kernelScanning}>{kernelScanning ? 'Scanning...' : '↻ Re-scan'}</button>
+              <button className="s-btn s-btn-ghost s-btn-sm" onClick={handleKernelScan} disabled={kernelScanning}>{kernelScanning ? 'Wird gescannt...' : '\u21bb Erneut scannen'}</button>
             </div>
           </div>
-          {kernelScanning && !kernelResult && <div style={{ textAlign: 'center', padding: 20, color: 'var(--s-text-dim)' }}>Checking ELAM, VBS, TPM 2.0, Secure Boot, DSE, Shadow Stack, PatchGuard...</div>}
+          {kernelScanning && !kernelResult && <div style={{ textAlign: 'center', padding: 20, color: 'var(--s-text-dim)' }}>{'Pr\u00fcfe ELAM, VBS, TPM 2.0, Secure Boot, DSE, Shadow Stack, PatchGuard...'}</div>}
           {kernelResult?.checks && (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 6 }}>
               {kernelResult.checks.map((c, i) => (

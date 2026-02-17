@@ -236,7 +236,7 @@ const LiveAuditLog: React.FC<LiveAuditLogProps> = ({ maxHeight = 400, compact = 
             transition: 'transform 0.2s',
             transform: collapsed ? 'rotate(0deg)' : 'rotate(180deg)',
           }}>
-            \u25b4
+            {'\u25b4'}
           </span>
         )}
       </div>

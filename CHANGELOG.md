@@ -2,6 +2,73 @@
 
 ---
 
+## [3.5.0] — 2026-02-17
+
+### Neue Funktionen / New Features
+
+#### Threat Intelligence Automation
+- **Automatische YARA-Scans**: Überwacht Downloads, Temp und Startup-Ordner im Hintergrund (konfigurierbar).
+  *Automatic YARA scans monitoring Downloads, Temp, and Startup folders in background.*
+- **Automatische IoC-Netzwerkprüfung**: Aktive Verbindungen werden gegen IoC-Feeds geprüft.
+  *Active connections checked against IoC feeds automatically.*
+- **Automatische Feed-Synchronisation**: abuse.ch und MISP-Feeds werden regelmäßig aktualisiert.
+  *abuse.ch and MISP feeds synced on configurable intervals.*
+- **Dashboard-Karte**: Prominente Threat-Intel-Automations-Karte mit Echtzeit-Status und Ein-Klick-Steuerung.
+  *Prominent Dashboard card with real-time status and one-click controls.*
+
+#### Dateiverschlüsselung — Drag & Drop
+- **Drag & Drop Verschlüsselung**: Dateien per Drag & Drop oder Dateiauswahl-Dialog verschlüsseln.
+  *Encrypt files via drag & drop or file picker dialog.*
+- **In-Place Verschlüsselung**: Original wird durch `.sentinel`-Datei ersetzt (kein Kopieren in Vault-Ordner).
+  *In-place encryption: original replaced by .sentinel file (no vault-dir copy).*
+- **In-Place Entschlüsselung**: `.sentinel`-Datei wird zur Originaldatei zurückgewandelt.
+  *In-place decryption: .sentinel restored to original file.*
+- **AES-256-GCM + PBKDF2**: Militärische Verschlüsselung mit passwortbasierter Schlüsselableitung (100.000 Iterationen).
+  *Military-grade encryption with password-based key derivation (100k iterations).*
+
+### Behoben / Bug Fixes
+
+#### Hardening-Audit Falsch-Negative
+- **Windows-Firewall**: `Get-NetFirewallProfile` fiel ohne Admin-Rechte aus. Fallback auf `netsh advfirewall show allprofiles state` hinzugefügt. Akzeptiert `Enabled === 1` (nicht nur `true`).
+  *Firewall check now has netsh fallback for non-admin. Accepts Enabled===1.*
+- **Windows Defender**: `Get-MpComputerStatus` JSON-Parsing verbessert. Fallback auf `Get-Service WinDefend`. Signatur-Alter-Schwelle von 3 auf 7 Tage erhöht.
+  *Defender check improved JSON parsing, service fallback, signature age threshold 3→7 days.*
+- **BitLocker**: Windows Home (kein BitLocker) wird jetzt als `warn` mit reduziertem Gewicht (5) statt `fail` (10) gewertet.
+  *BitLocker on Windows Home now warn with reduced weight instead of fail.*
+- **PowerShell Timeout**: 8s → 12s für langsamere Ersterkennung.
+  *PS timeout increased 8s→12s for slower first-run detection.*
+- **Alle Labels**: Alle Hardening-Check-Namen und Details vollständig auf Deutsch übersetzt.
+  *All hardening check names and details translated to German.*
+
+#### Vault-Seite — IP Whitelist entfernt
+- **IP-Whitelist** aus dem ARGUS-Verschlüsselungs-Tab entfernt — gehört nicht auf die Tresor-Seite. Ersetzt durch ARGUS-Backend-Status-Anzeige.
+  *Removed IP whitelist from ARGUS encryption tab — replaced with ARGUS backend status display.*
+
+#### Adaptive Zugriffschutz
+- **Activity-Log-Eintrag**: Toggle-Aktivierung/-Deaktivierung wird jetzt im Aktivitätslog protokolliert.
+  *Toggle enable/disable now logged in activity log.*
+
+### Sicherheit / Security
+
+- **DSGVO Art.32**: Dateiverschlüsselung AES-256-GCM mit PBKDF2 (100.000 Iterationen), alle Daten lokal ✅
+- **Keine Secrets im Repo**: `.env` gitignored, `secedit.jfm`/`.sdb` aus Git entfernt, `.env.example` enthält nur Platzhalter ✅
+- **Electron-Sicherheit**: `nodeIntegration=false`, `contextIsolation=true`, `sandbox=true` ✅
+- **IPC-Integrität**: Alle IPC-Kanäle über `contextBridge`, Zod-Validierung für kritische Kanäle ✅
+- **Build**: tsc 0 Fehler, webpack 3/3 kompiliert, 92/92 Sicherheitstests bestanden ✅
+
+### Geänderte Dateien / Modified Files
+- `src/main/services/threatIntelAutomation.ts` — Neuer Automation-Engine
+- `src/main/main.ts` — IPC-Handler für Threat-Auto + Datei-Verschlüsselung in-place + Datei-Dialog
+- `src/preload/preload.ts` — `threatAuto` + `vault.selectFiles`/`selectOutputDir` IPC-Kanäle
+- `src/renderer/pages/Dashboard.tsx` — Threat-Intel-Automations-Karte
+- `src/renderer/pages/VaultPage.tsx` — Drag & Drop Dateiverschlüsselung + IP-Whitelist entfernt
+- `src/renderer/i18n/de.ts` — Labels Dateiverschlüsselung
+- `src/renderer/i18n/en.ts` — Labels File Encryption
+- `src/main/services/system/hardeningAudit.ts` — Firewall/Defender Falsch-Negative + deutsche Labels
+- `.gitignore` — `secedit.*`, `*.jfm`, `*.sdb`, `tests/test-report-*.md`
+
+---
+
 ## [3.4.0] — 2026-02-15
 
 ### Behoben / Bug Fixes

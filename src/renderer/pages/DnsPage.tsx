@@ -8,6 +8,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { notify } from '../components/Common/SentinelNotification';
+import InfoBadge from '../components/Common/InfoBadge';
+import InputModal, { useInputModal } from '../components/Common/InputModal';
 import { useTranslation } from 'react-i18next';
 import { LegacyScanCheckItem as ScanCheckItem } from '../components/Common/ScanCheckItem';
 
@@ -43,6 +45,7 @@ interface CurrentDns {
 const DnsPage: React.FC = () => {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const { showInput, modalProps } = useInputModal();
   const [tab, setTab] = useState<Tab>('dns');
   const [currentDns, setCurrentDns] = useState<CurrentDns | null>(null);
   const [presets, setPresets] = useState<DnsPreset[]>(DNS_PRESETS_DATA.map((p) => ({ ...p, latency: null, testing: false })));
@@ -124,7 +127,7 @@ const DnsPage: React.FC = () => {
         setHasBackup(true);
         showMsg(r.message || `DNS set to ${primary} / ${secondary}`, 'success');
       } else {
-        showMsg(r?.message || 'Failed to set DNS', 'error');
+        showMsg(r?.message || 'DNS konnte nicht gesetzt werden', 'error');
       }
     } catch (e) { showMsg(String(e), 'error'); }
   };
@@ -165,9 +168,9 @@ const DnsPage: React.FC = () => {
       const r = await api()?.ghost?.saveHostsFile?.(hostsContent);
       if (r?.success) {
         setHostsModified(false);
-        showMsg('Hosts file saved', 'success');
+        showMsg('Hosts-Datei gespeichert', 'success');
       } else {
-        showMsg(r?.error || 'Failed to save', 'error');
+        showMsg(r?.error || 'Speichern fehlgeschlagen', 'error');
       }
     } catch (e) { showMsg(String(e), 'error'); }
     setSaving(false);
@@ -214,6 +217,16 @@ const DnsPage: React.FC = () => {
       <AnimatePresence mode="wait">
         {tab === 'dns' && (
           <motion.div key="dns" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+            {/* DSGVO + DNS Info Callout */}
+            <div className="s-callout s-callout-success" style={{ gap: 12 }}>
+              <div style={{ display: 'flex', gap: 6, flexShrink: 0, marginTop: 2 }}>
+                <InfoBadge glossaryKey="DSGVO Art.5" />
+                <InfoBadge glossaryKey="LOKAL" />
+              </div>
+              <div style={{ fontSize: '0.65rem', color: 'var(--s-text-dim)', lineHeight: 1.5 }}>
+                <strong style={{ color: 'var(--s-text-muted)' }}>Was ist DNS?</strong>{' Das Domain Name System (DNS) ist das \u201eTelefonbuch des Internets\u201c \u2014 es \u00fcbersetzt Webseiten-Namen (z.B. google.de) in IP-Adressen. Ihr DNS-Anbieter sieht '}<strong style={{ color: 'var(--s-text-secondary)' }}>jede Webseite</strong>{', die Sie besuchen. Ein datenschutzfreundlicher DNS-Anbieter wie Cloudflare oder Quad9 sch\u00fctzt Ihre Privatsph\u00e4re besser als der Standard-DNS Ihres Internetanbieters. Alle \u00c4nderungen werden direkt auf Ihrem Ger\u00e4t vorgenommen \u2014 keine Daten\u00fcbertragung an Dritte.'}
+              </div>
+            </div>
             {/* Current DNS + Rollback */}
             <div className="s-card-spacy" style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
               <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--s-green)', boxShadow: '0 0 8px var(--s-green)', animation: 'pulse-green 2s ease-in-out infinite', flexShrink: 0 }} />
@@ -328,7 +341,7 @@ const DnsPage: React.FC = () => {
                   className="s-btn s-btn-ghost s-btn-sm"
                   disabled={!isAdmin}
                   onClick={async () => {
-                    const url = prompt('Enter blocklist URL (e.g. https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts):');
+                    const url = await showInput({ title: 'Blocklist importieren', message: 'Geben Sie die URL einer Hosts-Blockliste ein. Empfohlen: Steven Black (Werbung + Malware + Tracker).', placeholder: 'https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts', variant: 'info', confirmLabel: 'Importieren' });
                     if (!url?.trim()) return;
                     try {
                       const r = await api()?.ghost?.importHostsBlocklist?.(url.trim());
@@ -345,6 +358,10 @@ const DnsPage: React.FC = () => {
                 </button>
               </div>
             </div>
+            {/* Beginner explanation */}
+            <div style={{ fontSize: '0.65rem', color: 'var(--s-text-dim)', lineHeight: 1.5, padding: '8px 12px', borderRadius: 8, background: 'rgba(109,120,255,0.02)', border: '1px dashed rgba(109,120,255,0.08)', marginBottom: 4 }}>
+              <strong style={{ color: 'var(--s-text-muted)' }}>{'Was ist die Hosts-Datei?'}</strong>{' Die Hosts-Datei ist ein lokales "Telefonbuch", das Domainnamen direkt auf IP-Adressen zuordnet \u2014 '}<strong style={{ color: 'var(--s-text-secondary)' }}>bevor</strong>{' DNS abgefragt wird. Durch Eintr\u00e4ge wie '}<code style={{ fontSize: '0.6rem', color: 'var(--s-cyan)' }}>0.0.0.0 tracking.example.com</code>{' k\u00f6nnen Sie Tracker, Werbung und Malware-Domains systemweit blockieren. Importieren Sie eine Blockliste (z.B. Steven Black) f\u00fcr sofortigen Schutz.'}
+            </div>
             <textarea
               className="s-input"
               value={hostsContent}
@@ -358,18 +375,28 @@ const DnsPage: React.FC = () => {
               }}
             />
             <div style={{ marginTop: 8, fontSize: '0.6875rem', color: 'var(--s-text-dim)' }}>
-              C:\Windows\System32\drivers\etc\hosts — Requires admin privileges to save
+              {'C:\\Windows\\System32\\drivers\\etc\\hosts \u2014 Erfordert Administratorrechte zum Speichern'}
             </div>
           </motion.div>
         )}
         {tab === 'privacy' && (
           <motion.div key="privacy" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            {/* DSGVO + Privacy Info */}
+            <div style={{ padding: '10px 16px', borderRadius: 10, background: 'rgba(0,230,118,0.04)', border: '1px solid rgba(0,230,118,0.12)', display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 }}>
+              <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                <InfoBadge glossaryKey="DSGVO Art.25" />
+                <InfoBadge glossaryKey="LOKAL" />
+              </div>
+              <span style={{ fontSize: '0.625rem', color: 'var(--s-text-dim)', lineHeight: 1.4 }}>
+                {'Der Privacy-Scan pr\u00fcft 22 Windows-Einstellungen gegen Telemetrie, Tracker und Datenlecks. Alle Pr\u00fcfungen laufen lokal \u2014 entspricht DSGVO Art.25 (Datenschutz durch Technikgestaltung).'}
+              </span>
+            </div>
             {/* Scan trigger */}
             <div className="s-card-spacy" style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
               <div style={{ flex: 1 }}>
-                <div className="s-heading-sm">Sentinel Privacy & Hardening Scan</div>
+                <div className="s-heading-sm">{'Sentinel Privatsph\u00e4re- & H\u00e4rtungs-Scan'}</div>
                 <div style={{ fontSize: '0.75rem', color: 'var(--s-text-muted)', marginTop: 4 }}>
-                  22 deep checks: telemetry blocking, webcam/mic lock, clipboard protection, metadata stripping, GPO hardening, USB port lock, and more
+                  {'22 Tiefenpr\u00fcfungen: Telemetrie-Blockierung, Webcam/Mikrofon-Sperre, Zwischenablage-Schutz, Metadaten-Bereinigung, GPO-H\u00e4rtung, USB-Port-Sperre u.v.m.'}
                 </div>
               </div>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -379,7 +406,7 @@ const DnsPage: React.FC = () => {
                   </span>
                 )}
                 <button className="s-btn s-btn-primary" onClick={handlePrivacyScan} disabled={privScanning}>
-                  {privScanning ? 'Scanning...' : privResult ? '\u21bb Re-scan' : '\ud83d\udd12 Run Privacy Scan'}
+                  {privScanning ? 'Wird gescannt...' : privResult ? '\u21bb Erneut scannen' : '\ud83d\udd12 Datenschutz-Scan'}
                 </button>
               </div>
             </div>
@@ -387,16 +414,16 @@ const DnsPage: React.FC = () => {
             {/* Results */}
             {privScanning && !privResult && (
               <div className="s-card-spacy" style={{ textAlign: 'center', padding: 32, color: 'var(--s-text-dim)' }}>
-                Scanning 22 privacy & hardening checks (telemetry, webcam, clipboard, metadata, GPO, USB, lockscreen...)
+                {'22 Privatsph\u00e4re- und H\u00e4rtungspr\u00fcfungen werden durchgef\u00fchrt (Telemetrie, Webcam, Zwischenablage, Metadaten, GPO, USB, Sperrbildschirm...)'}
               </div>
             )}
             {privResult && (
               <div className="s-card-spacy">
                 <div className="s-flex-between" style={{ marginBottom: 12 }}>
                   <div style={{ display: 'flex', gap: 12, fontSize: '0.75rem' }}>
-                    <span style={{ color: 'var(--s-green)' }}>{'✓'} {privResult.passed} passed</span>
-                    <span style={{ color: 'var(--s-red)' }}>{'✕'} {privResult.total - privResult.passed} issues</span>
-                    <span style={{ color: 'var(--s-text-dim)' }}>{privResult.total} total</span>
+                    <span style={{ color: 'var(--s-green)' }}>{'\u2713'} {privResult.passed} bestanden</span>
+                    <span style={{ color: 'var(--s-red)' }}>{'\u2715'} {privResult.total - privResult.passed} Probleme</span>
+                    <span style={{ color: 'var(--s-text-dim)' }}>{privResult.total} gesamt</span>
                   </div>
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 6 }}>
@@ -409,6 +436,7 @@ const DnsPage: React.FC = () => {
           </motion.div>
         )}
       </AnimatePresence>
+      <InputModal {...modalProps} />
     </div>
   );
 };
