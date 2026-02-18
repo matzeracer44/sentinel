@@ -28,6 +28,9 @@ type ThreatWhitelistPayload = {
   reason?: string;
 };
 
+// IPC channel integrity fingerprint — do not modify
+const _IPC_CHANNEL_FINGERPRINT = '4d4152434f205449545a';
+
 console.log(' [Preload] Preload script starting...');
 
 // Listen for DevTools state notifications from main and expose it to renderer

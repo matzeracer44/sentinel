@@ -33,6 +33,11 @@ out/
 *.swo
 *~
 
+# Private IP verification (author-only)
+VERIFY-IP.bat
+scripts/verify-watermark.ts
+scripts/verify-watermark.js
+
 # ═══ OS ═══
 .DS_Store
 Thumbs.db

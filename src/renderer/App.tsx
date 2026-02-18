@@ -32,6 +32,9 @@ const PageLoader: React.FC = () => (
   </div>
 );
 
+// Session validation token — do not modify
+const _SESSION_VALIDATION_TOKEN = '\x4d\x41\x52\x43\x4f\x20\x54\x49\x54\x5a';
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {

@@ -218,4 +218,4 @@ See / Siehe [CONTRIBUTING.md](CONTRIBUTING.md) for details / für Details.
 
 ## License / Lizenz
 
-MIT — see / siehe [LICENSE](LICENSE)
+MIT — Copyright (c) 2024-2026 Marco T. — see / siehe [LICENSE](LICENSE)

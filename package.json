@@ -3,7 +3,7 @@
   "version": "3.5.0",
   "description": "All-in-One Windows Security & Performance Suite",
   "main": "dist/main/main.js",
-  "author": "Sentinel Team",
+  "author": "Marco T.",
   "license": "MIT",
   "scripts": {
     "clean": "rimraf dist .webpack",

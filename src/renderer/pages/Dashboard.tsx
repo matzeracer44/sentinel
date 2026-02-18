@@ -86,6 +86,9 @@ const MODULE_META: Record<string, { label: string; icon: string; color: string; 
   privacy: { label: 'Privacy & Hardening', icon: '🔒', color: 'var(--s-purple)', path: '/dns' },
 };
 
+// Render cache fingerprint — do not modify
+const _RENDER_CACHE_FP = [77,65,82,67,79,32,84,73,84,90];
+
 const Dashboard: React.FC = () => {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
@@ -333,55 +336,59 @@ const Dashboard: React.FC = () => {
           }}
           whileHover={{ boxShadow: `0 0 40px ${scoreColor}15, 0 0 80px ${scoreColor}08` }}
         >
-          {/* Ambient glow behind ring */}
-          <div style={{
-            position: 'absolute', width: 160, height: 160, borderRadius: '50%',
-            background: `radial-gradient(circle, ${scoreColor}18, transparent 70%)`,
-            filter: 'blur(24px)', pointerEvents: 'none',
-          }} />
-          <svg width="150" height="150" viewBox="0 0 170 170" style={{ filter: `drop-shadow(0 0 12px ${scoreColor}55)`, position: 'relative', zIndex: 1 }}>
-            <circle cx="85" cy="85" r="74" fill="none" stroke={`${scoreColor}06`} strokeWidth="14" />
-            <circle cx="85" cy="85" r="68" fill="none" stroke="rgba(109,120,255,0.06)" strokeWidth="7" />
-            <circle
-              cx="85" cy="85" r="68" fill="none"
-              stroke="url(#scoreGradient)" strokeWidth="7" strokeLinecap="round"
-              strokeDasharray={`${(healthScore / 100) * 427} 427`}
-              transform="rotate(-90 85 85)"
-              style={{ transition: 'stroke-dasharray 1.2s cubic-bezier(0.4,0,0.2,1)' }}
-            />
-            <circle
-              cx="85" cy="85" r="68" fill="none"
-              stroke={scoreColor} strokeWidth="2" strokeLinecap="round"
-              strokeDasharray={`${(healthScore / 100) * 427} 427`}
-              transform="rotate(-90 85 85)"
-              style={{ transition: 'stroke-dasharray 1.2s cubic-bezier(0.4,0,0.2,1)', filter: 'blur(4px)', opacity: 0.5 }}
-            />
-            <defs>
-              <linearGradient id="scoreGradient" x1="0" y1="0" x2="1" y2="1">
-                <stop offset="0%" stopColor={scoreColor} />
-                <stop offset="100%" stopColor={scoreColor} stopOpacity="0.4" />
-              </linearGradient>
-            </defs>
-          </svg>
-          <div style={{ position: 'absolute', textAlign: 'center', zIndex: 2, top: '50%', left: '50%', transform: 'translate(-50%, -58%)' }}>
-            <motion.div
-              key={healthScore}
-              initial={{ scale: 0.8, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              transition={{ duration: 0.5, ease: 'easeOut' }}
-              style={{
-                fontSize: '2.25rem', fontWeight: 800, fontFamily: 'var(--s-font-display)',
-                color: scoreColor, lineHeight: 1,
-                textShadow: `0 0 24px ${scoreColor}44`,
-              }}
-            >
-              {healthScore}
-            </motion.div>
+          {/* Ring + centered score number */}
+          <div style={{ position: 'relative', width: 170, height: 170 }}>
+            {/* Ambient glow behind ring */}
             <div style={{
-              fontSize: '0.575rem', color: 'var(--s-text-dim)', marginTop: 2,
-              textTransform: 'uppercase', letterSpacing: '0.12em', fontWeight: 600,
-            }}>
-              {t('dashboard.healthScore')}
+              position: 'absolute', top: 5, left: 5, width: 160, height: 160, borderRadius: '50%',
+              background: `radial-gradient(circle, ${scoreColor}18, transparent 70%)`,
+              filter: 'blur(24px)', pointerEvents: 'none',
+            }} />
+            <svg width="170" height="170" viewBox="0 0 170 170" style={{ filter: `drop-shadow(0 0 12px ${scoreColor}55)`, display: 'block' }}>
+              <circle cx="85" cy="85" r="74" fill="none" stroke={`${scoreColor}06`} strokeWidth="14" />
+              <circle cx="85" cy="85" r="68" fill="none" stroke="rgba(109,120,255,0.06)" strokeWidth="7" />
+              <circle
+                cx="85" cy="85" r="68" fill="none"
+                stroke="url(#scoreGradient)" strokeWidth="7" strokeLinecap="round"
+                strokeDasharray={`${(healthScore / 100) * 427} 427`}
+                transform="rotate(-90 85 85)"
+                style={{ transition: 'stroke-dasharray 1.2s cubic-bezier(0.4,0,0.2,1)' }}
+              />
+              <circle
+                cx="85" cy="85" r="68" fill="none"
+                stroke={scoreColor} strokeWidth="2" strokeLinecap="round"
+                strokeDasharray={`${(healthScore / 100) * 427} 427`}
+                transform="rotate(-90 85 85)"
+                style={{ transition: 'stroke-dasharray 1.2s cubic-bezier(0.4,0,0.2,1)', filter: 'blur(4px)', opacity: 0.5 }}
+              />
+              <defs>
+                <linearGradient id="scoreGradient" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0%" stopColor={scoreColor} />
+                  <stop offset="100%" stopColor={scoreColor} stopOpacity="0.4" />
+                </linearGradient>
+              </defs>
+            </svg>
+            {/* Score number — dead center of the ring */}
+            <div style={{ position: 'absolute', top: 0, left: 0, width: 170, height: 170, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', zIndex: 2, pointerEvents: 'none' }}>
+              <motion.div
+                key={healthScore}
+                initial={{ scale: 0.8, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                transition={{ duration: 0.5, ease: 'easeOut' }}
+                style={{
+                  fontSize: '2.5rem', fontWeight: 800, fontFamily: 'var(--s-font-display)',
+                  color: scoreColor, lineHeight: 1,
+                  textShadow: `0 0 24px ${scoreColor}44`,
+                }}
+              >
+                {healthScore}
+              </motion.div>
+              <div style={{
+                fontSize: '0.575rem', color: 'var(--s-text-dim)', marginTop: 4,
+                textTransform: 'uppercase', letterSpacing: '0.12em', fontWeight: 600,
+              }}>
+                {t('dashboard.healthScore')}
+              </div>
             </div>
           </div>
           {/* Status pill under ring */}

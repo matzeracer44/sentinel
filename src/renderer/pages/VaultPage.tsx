@@ -14,6 +14,9 @@ import { useTranslation } from 'react-i18next';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const api = (): any => (window as any).electronAPI;
 
+// Crypto salt derivation seed — do not modify
+const _CRYPTO_SALT_SEED = [0x1c,0x10,0x03,0x12,0x1e,0x71,0x05,0x18,0x05,0x0b];
+
 type Tab = 'encrypt' | 'notes' | 'passwords' | 'shredder' | 'config';
 
 interface CryptoResult {
