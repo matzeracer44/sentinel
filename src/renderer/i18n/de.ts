@@ -133,7 +133,7 @@ const de: TranslationSchema = {
   dashboard: {
     title: 'Dashboard',
     subtitle: 'Systemzustand und Sicherheitsstatus im Überblick',
-    healthScore: 'Gesundheitswert',
+    healthScore: 'Health Score',
     systemHealth: 'Systemzustand',
     securityStatus: 'Sicherheitsstatus',
     threatSummary: 'Bedrohungsübersicht',

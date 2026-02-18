@@ -137,8 +137,9 @@ const Dashboard: React.FC = () => {
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 4000);
-    return () => clearInterval(interval);
+    const fastBurst = setTimeout(fetchData, 500);
+    const interval = setInterval(fetchData, 2000);
+    return () => { clearTimeout(fastBurst); clearInterval(interval); };
   }, [fetchData]);
 
   // Restore persisted scan result on mount
@@ -192,7 +193,7 @@ const Dashboard: React.FC = () => {
       } catch (e: any) { console.warn('[Dashboard] ThreatAuto status:', e?.message); }
     };
     fetchStatus();
-    const interval = setInterval(fetchStatus, 10000);
+    const interval = setInterval(fetchStatus, 5000);
     return () => clearInterval(interval);
   }, []);
 
@@ -362,14 +363,14 @@ const Dashboard: React.FC = () => {
               </linearGradient>
             </defs>
           </svg>
-          <div style={{ position: 'absolute', textAlign: 'center', zIndex: 2 }}>
+          <div style={{ position: 'absolute', textAlign: 'center', zIndex: 2, top: '50%', left: '50%', transform: 'translate(-50%, -58%)' }}>
             <motion.div
               key={healthScore}
               initial={{ scale: 0.8, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               transition={{ duration: 0.5, ease: 'easeOut' }}
               style={{
-                fontSize: '2.5rem', fontWeight: 800, fontFamily: 'var(--s-font-display)',
+                fontSize: '2.25rem', fontWeight: 800, fontFamily: 'var(--s-font-display)',
                 color: scoreColor, lineHeight: 1,
                 textShadow: `0 0 24px ${scoreColor}44`,
               }}
@@ -377,7 +378,7 @@ const Dashboard: React.FC = () => {
               {healthScore}
             </motion.div>
             <div style={{
-              fontSize: '0.575rem', color: 'var(--s-text-dim)', marginTop: 4,
+              fontSize: '0.575rem', color: 'var(--s-text-dim)', marginTop: 2,
               textTransform: 'uppercase', letterSpacing: '0.12em', fontWeight: 600,
             }}>
               {t('dashboard.healthScore')}

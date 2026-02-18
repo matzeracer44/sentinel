@@ -803,6 +803,27 @@ function createWindow() {
     show: false,
   });
 
+  // Application menu with Edit role — enables Ctrl+C/V/X/A keyboard shortcuts
+  const appMenu = Menu.buildFromTemplate([
+    { label: 'File', submenu: [{ role: 'quit' }] },
+    { label: 'Edit', submenu: [
+      { role: 'undo' }, { role: 'redo' }, { type: 'separator' },
+      { role: 'cut' }, { role: 'copy' }, { role: 'paste' },
+      { role: 'selectAll' },
+    ]},
+    { label: 'View', submenu: [
+      { role: 'reload' }, { role: 'forceReload' },
+      { role: 'toggleDevTools' }, { type: 'separator' },
+      { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' },
+      { type: 'separator' }, { role: 'togglefullscreen' },
+    ]},
+    { label: 'Window', submenu: [{ role: 'minimize' }, { role: 'close' }] },
+    { label: 'Help', submenu: [
+      { label: 'Sentinel v3.5.0', enabled: false },
+    ]},
+  ]);
+  Menu.setApplicationMenu(appMenu);
+
   // CSP: Remove unsafe-eval, restrict sources to self + ARGUS localhost
   const { session } = require('electron');
   session.defaultSession.webRequest.onHeadersReceived((details: any, callback: any) => {
