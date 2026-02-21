@@ -7,6 +7,7 @@ import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
+import SentinelLogo from '../../../../public/SentinelLogo.png';
 
 interface NavItem {
   path: string;
@@ -96,7 +97,7 @@ const Sidebar: React.FC = () => {
             fontSize: 20, position: 'relative', overflow: 'hidden',
           }}
         >
-          <span style={{ position: 'relative', zIndex: 2, filter: 'drop-shadow(0 0 6px rgba(60,240,255,0.6))' }}>◆</span>
+          <img src={SentinelLogo} alt="Sentinel" style={{ width: 28, height: 28, position: 'relative', zIndex: 2, filter: 'drop-shadow(0 0 6px rgba(60,240,255,0.6))', objectFit: 'contain' }} />
           <div style={{
             position: 'absolute', inset: 0,
             background: 'conic-gradient(from 0deg, rgba(60,240,255,0.08), rgba(167,139,250,0.08), rgba(255,63,180,0.08), rgba(60,240,255,0.08))',
